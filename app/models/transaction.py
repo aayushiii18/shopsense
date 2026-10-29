@@ -27,6 +27,9 @@ class Transaction(Base):
     vendor_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("vendors.id", ondelete="RESTRICT"), nullable=False, index=True
     )
+    customer_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("customers.customer_id", ondelete="SET NULL"), nullable=True, index=True
+    )
     quantity: Mapped[int] = mapped_column(Integer, nullable=False)
     unit_price: Mapped[float] = mapped_column(Float, nullable=False)
     amount: Mapped[float] = mapped_column(Float, nullable=False)
@@ -40,6 +43,7 @@ class Transaction(Base):
     # Relationships
     product: Mapped["Product"] = relationship("Product", back_populates="transactions")  # noqa: F821
     vendor: Mapped["Vendor"] = relationship("Vendor", back_populates="transactions")  # noqa: F821
+    customer: Mapped["Customer | None"] = relationship("Customer", back_populates="transactions")  # noqa: F821
 
     def __repr__(self) -> str:
         return (

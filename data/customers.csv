@@ -1,0 +1,61 @@
+customer_id,name,email,city,region,signup_date
+1,Aarav Sharma,aarav.sharma1@example.com,Bengaluru,Karnataka,2023-11-11 00:00:00
+2,Aditi Verma,aditi.verma2@example.com,Mumbai,Maharashtra,2023-06-29 00:00:00
+3,Rohan Patel,rohan.patel3@example.com,Delhi,Delhi,2023-06-07 00:00:00
+4,Priya Mehta,priya.mehta4@example.com,Hyderabad,Telangana,2023-12-07 00:00:00
+5,Rahul Reddy,rahul.reddy5@example.com,Chennai,Tamil Nadu,2023-08-10 00:00:00
+6,Ananya Nair,ananya.nair6@example.com,Kolkata,West Bengal,2023-08-02 00:00:00
+7,Vikram Iyer,vikram.iyer7@example.com,Pune,Maharashtra,2023-07-28 00:00:00
+8,Sneha Rao,sneha.rao8@example.com,Ahmedabad,Gujarat,2023-07-06 00:00:00
+9,Arjun Gupta,arjun.gupta9@example.com,Bengaluru,Karnataka,2023-12-06 00:00:00
+10,Kavya Joshi,kavya.joshi10@example.com,Mumbai,Maharashtra,2023-06-27 00:00:00
+11,Siddharth Kapoor,siddharth.kapoor11@example.com,Delhi,Delhi,2023-11-21 00:00:00
+12,Neha Malhotra,neha.malhotra12@example.com,Hyderabad,Telangana,2023-12-07 00:00:00
+13,Karan Bhatia,karan.bhatia13@example.com,Chennai,Tamil Nadu,2023-10-18 00:00:00
+14,Pooja Chopra,pooja.chopra14@example.com,Kolkata,West Bengal,2023-06-23 00:00:00
+15,Manish Saxena,manish.saxena15@example.com,Pune,Maharashtra,2023-10-30 00:00:00
+16,Divya Deshmukh,divya.deshmukh16@example.com,Ahmedabad,Gujarat,2023-09-17 00:00:00
+17,Varun Kulkarni,varun.kulkarni17@example.com,Bengaluru,Karnataka,2023-06-09 00:00:00
+18,Isha Chatterjee,isha.chatterjee18@example.com,Mumbai,Maharashtra,2023-06-08 00:00:00
+19,Naveen Banerjee,naveen.banerjee19@example.com,Delhi,Delhi,2023-06-24 00:00:00
+20,Swati Mukherjee,swati.mukherjee20@example.com,Hyderabad,Telangana,2023-07-26 00:00:00
+21,Deepak Sharma,deepak.sharma21@example.com,Chennai,Tamil Nadu,2023-07-30 00:00:00
+22,Ritu Verma,ritu.verma22@example.com,Kolkata,West Bengal,2023-10-08 00:00:00
+23,Alok Patel,alok.patel23@example.com,Pune,Maharashtra,2023-11-02 00:00:00
+24,Meera Mehta,meera.mehta24@example.com,Ahmedabad,Gujarat,2023-06-07 00:00:00
+25,Gaurav Reddy,gaurav.reddy25@example.com,Bengaluru,Karnataka,2023-10-22 00:00:00
+26,Simran Nair,simran.nair26@example.com,Mumbai,Maharashtra,2023-07-21 00:00:00
+27,Suresh Iyer,suresh.iyer27@example.com,Delhi,Delhi,2023-12-01 00:00:00
+28,Tanya Rao,tanya.rao28@example.com,Hyderabad,Telangana,2023-11-14 00:00:00
+29,Amit Gupta,amit.gupta29@example.com,Chennai,Tamil Nadu,2023-11-27 00:00:00
+30,Shreya Joshi,shreya.joshi30@example.com,Kolkata,West Bengal,2023-10-18 00:00:00
+31,Kunal Kapoor,kunal.kapoor31@example.com,Pune,Maharashtra,2023-09-16 00:00:00
+32,Tanvi Malhotra,tanvi.malhotra32@example.com,Ahmedabad,Gujarat,2023-07-27 00:00:00
+33,Rajesh Bhatia,rajesh.bhatia33@example.com,Bengaluru,Karnataka,2023-09-23 00:00:00
+34,Nidhi Chopra,nidhi.chopra34@example.com,Mumbai,Maharashtra,2023-10-29 00:00:00
+35,Ashwin Saxena,ashwin.saxena35@example.com,Delhi,Delhi,2023-08-11 00:00:00
+36,Sunita Deshmukh,sunita.deshmukh36@example.com,Hyderabad,Telangana,2023-06-02 00:00:00
+37,Harsh Kulkarni,harsh.kulkarni37@example.com,Chennai,Tamil Nadu,2023-12-12 00:00:00
+38,Preeti Chatterjee,preeti.chatterjee38@example.com,Kolkata,West Bengal,2023-07-11 00:00:00
+39,Sanjay Banerjee,sanjay.banerjee39@example.com,Pune,Maharashtra,2023-11-26 00:00:00
+40,Komal Mukherjee,komal.mukherjee40@example.com,Ahmedabad,Gujarat,2023-09-17 00:00:00
+41,Nikhil Sharma,nikhil.sharma41@example.com,Bengaluru,Karnataka,2023-08-27 00:00:00
+42,Aanchal Verma,aanchal.verma42@example.com,Mumbai,Maharashtra,2023-08-11 00:00:00
+43,Pranav Patel,pranav.patel43@example.com,Delhi,Delhi,2023-07-10 00:00:00
+44,Payal Mehta,payal.mehta44@example.com,Hyderabad,Telangana,2023-07-26 00:00:00
+45,Abhishek Reddy,abhishek.reddy45@example.com,Chennai,Tamil Nadu,2023-12-13 00:00:00
+46,Jyoti Nair,jyoti.nair46@example.com,Kolkata,West Bengal,2023-08-26 00:00:00
+47,Vivek Iyer,vivek.iyer47@example.com,Pune,Maharashtra,2023-06-27 00:00:00
+48,Pallavi Rao,pallavi.rao48@example.com,Ahmedabad,Gujarat,2023-06-24 00:00:00
+49,Mohit Gupta,mohit.gupta49@example.com,Bengaluru,Karnataka,2023-09-06 00:00:00
+50,Aparna Joshi,aparna.joshi50@example.com,Mumbai,Maharashtra,2023-06-25 00:00:00
+51,Akash Kapoor,akash.kapoor51@example.com,Delhi,Delhi,2023-08-31 00:00:00
+52,Smriti Malhotra,smriti.malhotra52@example.com,Hyderabad,Telangana,2023-08-28 00:00:00
+53,Vishal Bhatia,vishal.bhatia53@example.com,Chennai,Tamil Nadu,2023-11-02 00:00:00
+54,Monika Chopra,monika.chopra54@example.com,Kolkata,West Bengal,2023-08-07 00:00:00
+55,Sachin Saxena,sachin.saxena55@example.com,Pune,Maharashtra,2023-06-12 00:00:00
+56,Bhavna Deshmukh,bhavna.deshmukh56@example.com,Ahmedabad,Gujarat,2023-12-04 00:00:00
+57,Tarun Kulkarni,tarun.kulkarni57@example.com,Bengaluru,Karnataka,2023-09-26 00:00:00
+58,Rashmi Chatterjee,rashmi.chatterjee58@example.com,Mumbai,Maharashtra,2023-10-16 00:00:00
+59,Manoj Banerjee,manoj.banerjee59@example.com,Delhi,Delhi,2023-07-02 00:00:00
+60,Kiran Mukherjee,kiran.mukherjee60@example.com,Hyderabad,Telangana,2023-09-05 00:00:00

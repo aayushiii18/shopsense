@@ -10,3 +10,4 @@ plotly
 httpx
 pytest
 pytest-asyncio
+scikit-learn

@@ -28,6 +28,7 @@ def db_session():
     Create all tables before each test, yield a session, then drop everything.
     This ensures test isolation — no test pollutes another's data.
     """
+    Base.metadata.drop_all(bind=test_engine)
     Base.metadata.create_all(bind=test_engine)
     session = TestingSessionLocal()
     try:

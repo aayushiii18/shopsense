@@ -23,6 +23,7 @@ class Product(Base):
     description: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     price: Mapped[float] = mapped_column(Float, nullable=False)
     category: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    parent_category: Mapped[str | None] = mapped_column(String(100), nullable=True)
     vendor_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("vendors.id", ondelete="CASCADE"), nullable=False, index=True
     )
@@ -37,6 +38,12 @@ class Product(Base):
     )
     transactions: Mapped[list["Transaction"]] = relationship(  # noqa: F821
         "Transaction", back_populates="product"
+    )
+    stock_movements: Mapped[list["StockMovement"]] = relationship(  # noqa: F821
+        "StockMovement", back_populates="product", cascade="all, delete-orphan"
+    )
+    interactions: Mapped[list["CustomerInteraction"]] = relationship(  # noqa: F821
+        "CustomerInteraction", back_populates="product", cascade="all, delete-orphan"
     )
 
     def __repr__(self) -> str:

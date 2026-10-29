@@ -1,0 +1,11 @@
+id,name,price,category,parent_category,vendor_id
+1,Wireless Noise-Canceling Headphones,299.99,Headphones,Electronics,1
+2,Ultra HD 4K Monitor 27-inch,499.99,Monitors,Electronics,1
+3,Ceramic Coffee Mug Set,19.99,Kitchenware,Home & Kitchen,2
+4,Ergonomic Desk Chair Cushion,89.99,Furniture,Home & Kitchen,2
+5,Organic Cotton T-Shirt,9.99,Apparel,Fashion,3
+6,Waterproof Hiking Jacket,149.99,Outerwear,Fashion,3
+7,Resistance Bands Set 5-Pack,34.99,Fitness,Sports & Fitness,4
+8,Adjustable Dumbbell 20kg,74.99,Strength Training,Sports & Fitness,4
+9,Artisan Espresso Machine,199.99,Coffee & Tea,Home & Kitchen,5
+10,Single-Origin Whole Bean Coffee 1kg,14.99,Groceries,Food & Beverage,5
