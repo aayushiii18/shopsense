@@ -1,5 +1,5 @@
 """
-dashboard/dashboard.py — Streamlit Multi-Module Analytics Dashboard for ShopSense.
+dashboard/dashboard.py — Streamlit Multi-Module Analytics Dashboard for StockPilot.
 
 Milestone 2 Features:
   Tab 1: 💰 Sales & Revenue (Executive KPIs, Vendor Breakdown, Top Products)
@@ -30,14 +30,15 @@ API_BASE = os.getenv("API_BASE_URL", "http://127.0.0.1:8000")
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
 
 st.set_page_config(
-    page_title="ShopSense Retail Analytics & AI Platform",
-    page_icon="🛍️",
+    page_title="StockPilot — Retail Management Platform",
+    page_icon="📦",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-st.title("🛍️ ShopSense — Retail Analytics & Recommendation Platform")
-st.caption("Inventory Control, Demand Forecasting, Customer Segmentation, and Collaborative Recommendations")
+st.title("📦 StockPilot — Retail Management Platform for Inventory Control and Sales Analytics")
+st.markdown("##### *Smarter Stock. Better Decisions.*")
+st.caption("An intelligent retail management platform featuring inventory analytics, demand forecasting, customer segmentation, and personalized product recommendations.")
 
 # ── API Helper ───────────────────────────────────────────────────────────────
 def api_get(path: str, timeout: int = 5):
@@ -502,7 +503,7 @@ with tab_recs:
                         "product_name": row["name"],
                         "category": row.get("category", "General"),
                         "price": float(row["price"]),
-                        "vendor_name": row.get("name_vendor", "ShopSense Vendor"),
+                        "vendor_name": row.get("name_vendor", "StockPilot Vendor"),
                         "score": round(float(row["quantity"]), 1),
                         "rationale": f"Catalog Best-Seller ({row['quantity']} units sold across platform).",
                     }

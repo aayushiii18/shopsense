@@ -1,5 +1,5 @@
 """
-generate_datasets.py — Generate realistic, statistically-grounded synthetic datasets for ShopSense Milestone 2.
+generate_datasets.py — Generate realistic, statistically-grounded synthetic datasets for StockPilot Milestone 2.
 
 Outputs:
   - data/vendors.csv (5 vendors)
@@ -345,7 +345,7 @@ def write_csv(filename, fieldnames, data):
     print(f"Generated {filename}: {len(data)} rows.")
 
 def main():
-    print("Generating ShopSense Milestone 2 synthetic datasets...")
+    print("Generating StockPilot Milestone 2 synthetic datasets...")
     write_csv("vendors.csv", ["id", "name", "email", "phone", "address"], VENDORS)
     write_csv("products.csv", ["id", "name", "price", "category", "parent_category", "vendor_id"], [
         {k: p[k] for k in ["id", "name", "price", "category", "parent_category", "vendor_id"]}

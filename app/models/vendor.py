@@ -1,7 +1,7 @@
 """
 models/vendor.py — ORM model for the vendors table.
 
-A vendor is an independent seller registered on the ShopSense platform.
+A vendor is an independent seller registered on the StockPilot platform.
 """
 
 from datetime import datetime

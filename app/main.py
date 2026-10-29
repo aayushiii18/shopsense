@@ -1,5 +1,5 @@
 """
-app/main.py — FastAPI application entry point for ShopSense.
+app/main.py — FastAPI application entry point for StockPilot.
 
 Start the server:
     uvicorn app.main:app --reload
@@ -18,10 +18,11 @@ from app.routes import (
 )
 
 app = FastAPI(
-    title="ShopSense — Multi-Vendor E-Commerce Analytics Platform",
+    title="StockPilot — Retail Management Platform for Inventory Control and Sales Analytics",
     description=(
-        "Retail Management Platform for Inventory Control and Sales Analytics. "
-        "Milestone 2: Inventory Analytics Engine, Customer Segmentation, and Recommendations."
+        "Smarter Stock. Better Decisions. "
+        "An intelligent retail management platform featuring inventory analytics, "
+        "demand forecasting, customer segmentation, and personalized product recommendations."
     ),
     version="2.0.0",
 )
@@ -39,4 +40,4 @@ app.include_router(recommendation_routes.router)
 @app.get("/", tags=["Health"])
 def root():
     """Health-check endpoint."""
-    return {"status": "ok", "message": "ShopSense API is running."}
+    return {"status": "ok", "message": "StockPilot API is running."}

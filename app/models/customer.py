@@ -1,7 +1,7 @@
 """
 models/customer.py — ORM model for the customers table.
 
-Represents an individual retail customer on the ShopSense platform.
+Represents an individual retail customer on the StockPilot platform.
 Used for customer behavioral analytics, RFM segmentation, and personalized recommendations.
 """
 

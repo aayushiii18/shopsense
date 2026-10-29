@@ -1,5 +1,5 @@
 """
-seed_data.py — Idempotent database seeder for ShopSense.
+seed_data.py — Idempotent database seeder for StockPilot.
 
 Reads CSV files from the data/ directory and safely ingests them into the
 PostgreSQL database configured in .env.
@@ -214,7 +214,7 @@ def seed_customer_interactions(db: Session):
 
 
 def main():
-    print("Starting ShopSense idempotent data ingestion...")
+    print("Starting StockPilot idempotent data ingestion...")
     db = SessionLocal()
     try:
         seed_vendors(db)

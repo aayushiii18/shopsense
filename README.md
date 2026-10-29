@@ -1,11 +1,11 @@
-# ShopSense — Multi-Vendor E-Commerce Analytics Platform
-**Retail Management Platform for Inventory Control and Sales Analytics**  
+# StockPilot — Retail Management Platform for Inventory Control and Sales Analytics
+> **Smarter Stock. Better Decisions.**
 *Infosys Springboard Internship Project — Milestones 1 & 2*
 
 ---
 
 ## 1. Project Overview
-**ShopSense** is an enterprise-grade backend and retail intelligence platform built with **FastAPI**, **PostgreSQL**, **SQLAlchemy**, and **Streamlit**. It empowers multi-vendor retail platforms to manage catalog operations, audit real-time inventory movements, forecast seasonal demand, segment customer behavior via unsupervised machine learning, and deliver personalized product recommendations.
+**StockPilot** is an intelligent retail management platform featuring inventory analytics, demand forecasting, customer segmentation, and personalized product recommendations. Built with an enterprise-grade backend using **FastAPI**, **PostgreSQL**, **SQLAlchemy**, and **Streamlit**, StockPilot empowers multi-vendor retail platforms to manage catalog operations, audit real-time inventory movements, forecast seasonal demand, segment customer behavior via unsupervised machine learning, and deliver personalized product recommendations.
 
 ---
 
@@ -180,18 +180,18 @@ Open `http://localhost:8501` to explore the 4-tab interactive dashboard.
 
 ---
 
-## 7. Automated Test Suite (80 Passing Tests)
+## 7. Automated Test Suite (85 Passing Tests)
 
 Run the full test suite with verbose output:
 ```powershell
 python -m pytest tests/ -v
 ```
 
-All 80 tests execute against an isolated SQLite database, guaranteeing zero side-effects on production or development PostgreSQL instances:
+All 85 tests execute against an isolated SQLite database, guaranteeing zero side-effects on production or development PostgreSQL instances:
 - `test_vendors.py` (25 tests) — RFC email validation, phone regex, duplicate rejection, pagination.
 - `test_products.py` (14 tests) — Product creation, FK verification, positive price constraints.
 - `test_inventory.py` (7 tests) — Inventory defaults, constraints, 1-to-1 unique product constraint.
 - `test_analytics.py` (10 tests) — Total revenue, vendor breakdown, product ranking, empty data safety.
-- `test_inventory_analytics.py` (12 tests) — Turnover, stock movements, low-stock alerts, demand forecast.
+- `test_inventory_analytics.py` (17 tests) — Turnover, stock movements, low-stock alerts, demand forecast, regression lookback tests.
 - `test_customer_analytics.py` (6 tests) — Customer KPIs, RFM metrics, K-Means clustering, silhouette score.
 - `test_recommendations.py` (6 tests) — Popularity fallback, collaborative filtering, Precision@K / Recall@K.

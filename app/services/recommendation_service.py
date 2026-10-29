@@ -228,7 +228,7 @@ def get_personalized_recommendations(
             "category": p.category,
             "parent_category": p.parent_category,
             "price": float(p.price),
-            "vendor_name": p.vendor.name if p.vendor else "ShopSense Vendor",
+            "vendor_name": p.vendor.name if p.vendor else "StockPilot Vendor",
             "score": round(float(score), 2),
             "recommendation_type": "Personalized Collaborative Filtering",
             "rationale": rationale,
