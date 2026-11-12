@@ -125,7 +125,8 @@ def run_analytical_pipeline(db: Optional[Session] = None) -> Dict[str, Any]:
         try:
             logger.info("Executing Task 1: Inventory forecasting model retraining and MLflow tracking...")
             from track_inventory import train_and_track_inventory_model
-            mlflow_res = train_and_track_inventory_model(db=db, register=True)
+            n_est = int(os.getenv("PIPELINE_N_ESTIMATORS", "100"))
+            mlflow_res = train_and_track_inventory_model(db=db, register=True, n_estimators=n_est)
             task_details["inventory_forecasting_retraining"] = {
                 "status": "SUCCESS",
                 "duration_seconds": round(time.time() - task_t0, 3),

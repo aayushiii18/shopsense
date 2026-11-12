@@ -22,6 +22,7 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import requests
 import streamlit as st
 from sklearn.preprocessing import StandardScaler
@@ -51,6 +52,30 @@ def _get_api_base() -> str:
 
 
 API_BASE = _get_api_base()
+
+
+@st.cache_data(ttl=60)
+def fetch_report_bytes(kind: str) -> bytes:
+    """Fetches PDF or Excel report binary from API or direct service fallback."""
+    try:
+        resp = requests.get(f"{API_BASE}/reports/{kind}", timeout=10)
+        if resp.status_code == 200:
+            return resp.content
+    except Exception:
+        pass
+    try:
+        from app.database import SessionLocal
+        from app.services.report_service import generate_pdf_report, generate_excel_report
+        db = SessionLocal()
+        try:
+            if kind == "pdf":
+                return generate_pdf_report(db)
+            else:
+                return generate_excel_report(db)
+        finally:
+            db.close()
+    except Exception:
+        return b""
 
 
 def api_get(path: str, timeout: int = 6):
@@ -268,6 +293,33 @@ if selected_page == "📊 Dashboard":
     st.title("📊 Executive Dashboard")
     st.caption("Consolidated marketplace sales performance, revenue analytics, and top product movements.")
 
+    # PDF & Excel Report Export Buttons (Milestone 3 Module 6)
+    rep_c1, rep_c2, _ = st.columns([1, 1, 2])
+    with rep_c1:
+        pdf_bytes = fetch_report_bytes("pdf")
+        if pdf_bytes:
+            st.download_button(
+                label="📄 Export PDF Report",
+                data=pdf_bytes,
+                file_name="stockpilot_executive_report.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+            )
+        else:
+            st.button("📄 Export PDF Report", disabled=True, use_container_width=True)
+    with rep_c2:
+        excel_bytes = fetch_report_bytes("excel")
+        if excel_bytes:
+            st.download_button(
+                label="📊 Export Excel Report",
+                data=excel_bytes,
+                file_name="stockpilot_executive_report.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
+        else:
+            st.button("📊 Export Excel Report", disabled=True, use_container_width=True)
+
     summary = api_get("/analytics/summary") if is_live_api else None
 
     # Load summary metrics
@@ -350,6 +402,97 @@ if selected_page == "📊 Dashboard":
             st.plotly_chart(fig_p, use_container_width=True)
         else:
             st.info("No product revenue records available.")
+
+    st.markdown("---")
+
+    # Advanced Revenue Intelligence Row (Milestone 3 Module 5)
+    st.subheader("📈 Advanced Revenue Intelligence & Market Share")
+    g_left, g_right = st.columns(2)
+
+    with g_left:
+        st.markdown("##### 📅 Month-over-Month (MoM) Revenue Growth")
+        growth_data = api_get("/analytics/revenue/growth") if is_live_api else None
+        if not growth_data and not csv_data["transactions"].empty:
+            df_g = csv_data["transactions"].copy()
+            df_g["year_month"] = df_g["transaction_date"].dt.to_period("M").astype(str)
+            monthly_agg = df_g.groupby("year_month")["amount"].sum().reset_index()
+            monthly_agg.columns = ["year_month", "revenue"]
+            growth_list = []
+            prev_r = None
+            for _, r in monthly_agg.iterrows():
+                cur_r = float(r["revenue"])
+                pct = round(((cur_r - prev_r) / prev_r) * 100, 2) if prev_r else None
+                prev_r = cur_r
+                growth_list.append({"year_month": r["year_month"], "revenue": cur_r, "mom_growth_pct": pct})
+            growth_data = {"monthly_growth": growth_list}
+
+        if growth_data and growth_data.get("monthly_growth"):
+            g_items = growth_data["monthly_growth"]
+            fig_g = make_subplots(specs=[[{"secondary_y": True}]])
+            fig_g.add_trace(
+                go.Bar(
+                    x=[item["year_month"] for item in g_items],
+                    y=[item["revenue"] for item in g_items],
+                    name="Revenue (₹)",
+                    marker_color="#0284c7",
+                ),
+                secondary_y=False,
+            )
+            fig_g.add_trace(
+                go.Scatter(
+                    x=[item["year_month"] for item in g_items],
+                    y=[item.get("mom_growth_pct") or 0.0 for item in g_items],
+                    name="MoM Growth (%)",
+                    mode="lines+markers",
+                    line=dict(color="#10b981", width=3),
+                    marker=dict(size=7),
+                ),
+                secondary_y=True,
+            )
+            fig_g.update_layout(
+                margin=dict(l=20, r=20, t=30, b=30),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            )
+            fig_g.update_yaxes(title_text="Revenue (₹)", secondary_y=False)
+            fig_g.update_yaxes(title_text="MoM Growth (%)", secondary_y=True)
+            st.plotly_chart(fig_g, use_container_width=True)
+        else:
+            st.info("Insufficient monthly revenue history for growth trends.")
+
+    with g_right:
+        st.markdown("##### 🏆 Vendor Benchmarking & Market Share")
+        bench_data = api_get("/analytics/revenue/benchmarking") if is_live_api else None
+        if not bench_data and not csv_data["transactions"].empty:
+            df_b = csv_data["transactions"].merge(csv_data["vendors"], left_on="vendor_id", right_on="id")
+            v_agg = df_b.groupby("name")["amount"].sum().reset_index()
+            total_b = v_agg["amount"].sum()
+            bench_items = [
+                {
+                    "vendor_name": r["name"],
+                    "revenue": float(r["amount"]),
+                    "market_share_pct": round(float(r["amount"]) / total_b * 100, 2) if total_b > 0 else 0.0,
+                }
+                for _, r in v_agg.sort_values("amount", ascending=False).iterrows()
+            ]
+            bench_data = {"benchmarking": bench_items}
+
+        if bench_data and bench_data.get("benchmarking"):
+            df_bench = pd.DataFrame(bench_data["benchmarking"]).sort_values("market_share_pct", ascending=True)
+            fig_bench = px.bar(
+                df_bench,
+                x="market_share_pct",
+                y="vendor_name",
+                orientation="h",
+                text="market_share_pct",
+                labels={"market_share_pct": "Market Share (%)", "vendor_name": "Vendor"},
+                color="revenue",
+                color_continuous_scale="Teal",
+            )
+            fig_bench.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
+            fig_bench.update_layout(margin=dict(l=20, r=20, t=30, b=30), showlegend=False)
+            st.plotly_chart(fig_bench, use_container_width=True)
+        else:
+            st.info("No vendor benchmarking records available.")
 
     st.markdown("---")
 
@@ -605,8 +748,9 @@ elif selected_page == "📋 Inventory Management":
             df_al = pd.DataFrame(alerts)[["product_name", "warehouse", "current_stock", "reorder_level", "status"]]
             st.dataframe(df_al, use_container_width=True)
 
-        tab_inv_grid, tab_inv_move, tab_inv_audit, tab_inv_replenish = st.tabs([
+        tab_inv_grid, tab_inv_intel, tab_inv_move, tab_inv_audit, tab_inv_replenish = st.tabs([
             "📊 Current Stock Levels",
+            "📈 Inventory Intelligence",
             "📥 Log Stock Movement / Restock",
             "📜 Movement Audit Trail",
             "🔄 Replenishment Recommendations",
@@ -618,6 +762,41 @@ elif selected_page == "📋 Inventory Management":
                 df_status[["product_id", "product_name", "warehouse", "current_stock", "reorder_level", "stock_value", "status"]],
                 use_container_width=True,
             )
+
+        with tab_inv_intel:
+            st.subheader("Inventory Distribution & Stock Health")
+            inv_col1, inv_col2 = st.columns(2)
+            with inv_col1:
+                status_counts = df_status["status"].value_counts().reset_index()
+                status_counts.columns = ["Status", "Count"]
+                fig_st = px.pie(
+                    status_counts,
+                    names="Status",
+                    values="Count",
+                    hole=0.45,
+                    title="Stock Status Categorization",
+                    color="Status",
+                    color_discrete_map={
+                        "HEALTHY": "#10b981",
+                        "LOW_STOCK": "#f59e0b",
+                        "OUT_OF_STOCK": "#ef4444",
+                        "CRITICAL": "#ef4444",
+                    },
+                )
+                fig_st.update_layout(margin=dict(l=20, r=20, t=40, b=20))
+                st.plotly_chart(fig_st, use_container_width=True)
+            with inv_col2:
+                fig_val = px.bar(
+                    df_status.sort_values("stock_value", ascending=False).head(10),
+                    x="product_name",
+                    y="stock_value",
+                    labels={"product_name": "Product", "stock_value": "Stock Value (₹)"},
+                    title="Top 10 Products by Inventory Holding Value",
+                    color="stock_value",
+                    color_continuous_scale="Blues",
+                )
+                fig_val.update_layout(margin=dict(l=20, r=20, t=40, b=30), showlegend=False, xaxis_tickangle=-30)
+                st.plotly_chart(fig_val, use_container_width=True)
 
         with tab_inv_move:
             st.subheader("Record Inbound Restock or Warehouse Adjustment")
@@ -851,6 +1030,23 @@ elif selected_page == "👥 Customer Analytics":
                 )
                 fig_scat.update_layout(margin=dict(l=20, r=20, t=30, b=30))
                 st.plotly_chart(fig_scat, use_container_width=True)
+
+        st.markdown("---")
+        st.subheader("📊 Customer Spend Distribution")
+        if rfm_data:
+            df_hist = pd.DataFrame(rfm_data)
+            m_col = "monetary" if "monetary" in df_hist.columns else ("lifetime_spend" if "lifetime_spend" in df_hist.columns else None)
+            if m_col:
+                fig_hist = px.histogram(
+                    df_hist,
+                    x=m_col,
+                    nbins=15,
+                    title="Customer Lifetime Spend Distribution",
+                    labels={m_col: "Lifetime Spend (₹)", "count": "Customer Count"},
+                    color_discrete_sequence=["#38bdf8"],
+                )
+                fig_hist.update_layout(margin=dict(l=20, r=20, t=30, b=20))
+                st.plotly_chart(fig_hist, use_container_width=True)
 
         st.markdown("---")
         st.subheader("📋 Customer RFM Metrics Table")

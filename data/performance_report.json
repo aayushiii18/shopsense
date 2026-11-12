@@ -1,0 +1,85 @@
+{
+  "timestamp": "2026-11-12 12:19:03 UTC",
+  "target_url": "http://127.0.0.1:8000",
+  "concurrent_users": 15,
+  "duration_seconds": 15.14,
+  "total_requests": 1795,
+  "total_failures": 0,
+  "failure_rate_pct": 0.0,
+  "throughput_rps": 118.52,
+  "metrics_ms": {
+    "min": 2.74,
+    "avg": 17.71,
+    "median": 11.55,
+    "p95": 27.36,
+    "p99": 39.75,
+    "max": 595.58
+  },
+  "target_p95_ms": 300.0,
+  "target_met": true,
+  "endpoint_breakdown": {
+    "/analytics/revenue": {
+      "requests": 233,
+      "failures": 0,
+      "failure_rate_pct": 0.0,
+      "avg_ms": 12.83,
+      "median_ms": 9.26,
+      "p95_ms": 20.73,
+      "p99_ms": 27.42
+    },
+    "/analytics/vendor-performance": {
+      "requests": 261,
+      "failures": 0,
+      "failure_rate_pct": 0.0,
+      "avg_ms": 9.86,
+      "median_ms": 8.31,
+      "p95_ms": 20.64,
+      "p99_ms": 27.55
+    },
+    "/analytics/customers": {
+      "requests": 248,
+      "failures": 0,
+      "failure_rate_pct": 0.0,
+      "avg_ms": 19.83,
+      "median_ms": 11.63,
+      "p95_ms": 27.77,
+      "p99_ms": 290.31
+    },
+    "/analytics/revenue/growth": {
+      "requests": 287,
+      "failures": 0,
+      "failure_rate_pct": 0.0,
+      "avg_ms": 16.29,
+      "median_ms": 8.75,
+      "p95_ms": 23.97,
+      "p99_ms": 97.66
+    },
+    "/analytics/revenue/benchmarking": {
+      "requests": 247,
+      "failures": 0,
+      "failure_rate_pct": 0.0,
+      "avg_ms": 20.47,
+      "median_ms": 17.34,
+      "p95_ms": 31.37,
+      "p99_ms": 40.37
+    },
+    "/forecast/{month}": {
+      "requests": 265,
+      "failures": 0,
+      "failure_rate_pct": 0.0,
+      "avg_ms": 19.27,
+      "median_ms": 10.68,
+      "p95_ms": 24.08,
+      "p99_ms": 237.23
+    },
+    "/recommend/{customer_id}": {
+      "requests": 254,
+      "failures": 0,
+      "failure_rate_pct": 0.0,
+      "avg_ms": 25.48,
+      "median_ms": 14.98,
+      "p95_ms": 30.96,
+      "p99_ms": 570.07
+    }
+  }
+}

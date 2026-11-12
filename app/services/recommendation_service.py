@@ -133,6 +133,12 @@ def build_item_similarity_matrix(df: pd.DataFrame) -> tuple[dict, dict]:
     return item_sim, user_profiles
 
 
+_CACHED_REC_DF = None
+_CACHED_REC_TIME = 0.0
+_CACHED_SIM_MATRIX = None
+_CACHED_USER_PROFILES = None
+
+
 def get_personalized_recommendations(
     db: Session, customer_id: int, top_n: int = 5, exclude_purchased: bool = True
 ) -> dict:
@@ -140,11 +146,21 @@ def get_personalized_recommendations(
     Generates personalized Top-N product recommendations for a customer
     using Item-Based Collaborative Filtering. Falls back gracefully to popular products.
     """
+    global _CACHED_REC_DF, _CACHED_REC_TIME, _CACHED_SIM_MATRIX, _CACHED_USER_PROFILES
+    import time
+
     customer = db.query(Customer).filter_by(customer_id=customer_id).first()
     if not customer:
         raise ValueError(f"Customer {customer_id} not found.")
 
-    df = _load_interaction_dataframe(db)
+    now = time.time()
+    if _CACHED_REC_DF is not None and (now - _CACHED_REC_TIME) < 60.0:
+        df = _CACHED_REC_DF
+    else:
+        df = _load_interaction_dataframe(db)
+        _CACHED_REC_DF = df
+        _CACHED_REC_TIME = now
+        _CACHED_SIM_MATRIX = None
     if df.empty or customer_id not in df["customer_id"].values:
         # Cold-start fallback
         fallback = get_popular_products(db, top_n=top_n)
@@ -156,7 +172,11 @@ def get_personalized_recommendations(
             "recommendations": fallback,
         }
 
-    item_sim, user_profiles = build_item_similarity_matrix(df)
+    if _CACHED_SIM_MATRIX is not None:
+        item_sim, user_profiles = _CACHED_SIM_MATRIX, _CACHED_USER_PROFILES
+    else:
+        item_sim, user_profiles = build_item_similarity_matrix(df)
+        _CACHED_SIM_MATRIX, _CACHED_USER_PROFILES = item_sim, user_profiles
     cust_profile = user_profiles.get(customer_id, {})
     interacted_products = {p for p, w in cust_profile.items() if w > 0}
 

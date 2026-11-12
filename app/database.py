@@ -25,11 +25,15 @@ if DATABASE_URL.startswith("postgres://"):
 # connect_args only needed for SQLite (thread-safety)
 _connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
 
-engine = create_engine(
-    DATABASE_URL,
-    connect_args=_connect_args,
-    pool_pre_ping=True,
-)
+_engine_kwargs = {
+    "connect_args": _connect_args,
+    "pool_pre_ping": True,
+}
+if not DATABASE_URL.startswith("sqlite"):
+    _engine_kwargs["pool_size"] = 30
+    _engine_kwargs["max_overflow"] = 20
+
+engine = create_engine(DATABASE_URL, **_engine_kwargs)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 

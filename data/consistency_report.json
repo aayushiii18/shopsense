@@ -1,0 +1,107 @@
+{
+  "timestamp": "2026-11-12T12:19:24.027679",
+  "total_checks": 12,
+  "passed_checks": 12,
+  "failed_checks": 0,
+  "consistency_pct": 100.0,
+  "target_pct": 99.0,
+  "target_met": true,
+  "checks": [
+    {
+      "name": "Total Revenue vs DB Transaction Sum",
+      "expected": 87725.58,
+      "actual": 87725.58,
+      "diff": 0.0,
+      "passed": true,
+      "category": "Revenue Intelligence"
+    },
+    {
+      "name": "GMV vs Total Revenue Equivalence",
+      "expected": 87725.58,
+      "actual": 87725.58,
+      "diff": 0.0,
+      "passed": true,
+      "category": "Revenue Intelligence"
+    },
+    {
+      "name": "Average Order Value (AOV) Calculation",
+      "expected": 146.21,
+      "actual": 146.21,
+      "diff": 0.0,
+      "passed": true,
+      "category": "Revenue Intelligence"
+    },
+    {
+      "name": "Vendor-wise Revenue Sum vs GMV",
+      "expected": 87725.58,
+      "actual": 87725.58,
+      "diff": 0.0,
+      "passed": true,
+      "category": "Revenue Intelligence"
+    },
+    {
+      "name": "Vendor Market Share Normalization (Sum = 100%)",
+      "expected": 100.0,
+      "actual": 100.0,
+      "diff": 0.0,
+      "passed": true,
+      "category": "Revenue Intelligence"
+    },
+    {
+      "name": "Registered Customer Count Consistency",
+      "expected": 60,
+      "actual": 60,
+      "diff": 0,
+      "passed": true,
+      "category": "Customer Intelligence"
+    },
+    {
+      "name": "Customer Lifetime Spend Average",
+      "expected": 1462.09,
+      "actual": 1462.09,
+      "diff": 0.0,
+      "passed": true,
+      "category": "Customer Intelligence"
+    },
+    {
+      "name": "Catalog Total Physical Stock Quantity",
+      "expected": 990,
+      "actual": 990,
+      "diff": 0,
+      "passed": true,
+      "category": "Inventory Intelligence"
+    },
+    {
+      "name": "Low-Stock Reorder Threshold Violations",
+      "expected": 0,
+      "actual": 0,
+      "diff": 0,
+      "passed": true,
+      "category": "Inventory Intelligence"
+    },
+    {
+      "name": "Inventory DSI x Turnover Mathematical Invariant",
+      "expected": 365,
+      "actual": 365.0,
+      "diff": 0.0,
+      "passed": true,
+      "category": "Inventory Intelligence"
+    },
+    {
+      "name": "Customer RFM Completeness (All Customers Evaluated)",
+      "expected": 60,
+      "actual": 60,
+      "diff": 0,
+      "passed": true,
+      "category": "Customer Intelligence"
+    },
+    {
+      "name": "Inventory Demand Forecast Model Inference Bounds",
+      "expected": "Positive integer prediction (RandomForest)",
+      "actual": "25 units (RandomForest)",
+      "diff": 0,
+      "passed": true,
+      "category": "Recommendation Intelligence"
+    }
+  ]
+}

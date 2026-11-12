@@ -662,6 +662,9 @@ def train_and_save_monthly_inventory_model(
     return model
 
 
+_CACHED_FORECAST_MODEL = None
+
+
 def predict_monthly_demand(
     month: int,
     db: Optional[Session] = None,
@@ -671,26 +674,31 @@ def predict_monthly_demand(
     Returns predicted inventory demand units for a given month index (1-12 or future month 13-24).
     Validates month parameter and utilizes the serialized RandomForest model.
     """
+    global _CACHED_FORECAST_MODEL
     import joblib
 
     if month < 1 or month > 24:
         raise ValueError(f"Invalid month {month}: must be between 1 and 24.")
 
-    model = None
-    try:
-        from track_inventory import load_registered_inventory_model
-        model = load_registered_inventory_model(model_name="InventoryForecast")
-    except Exception:
-        model = None
-
+    model = _CACHED_FORECAST_MODEL
     if model is None:
-        if not os.path.exists(model_path):
-            model = train_and_save_monthly_inventory_model(db=db, model_path=model_path)
-        else:
+        if os.path.exists(model_path):
             try:
                 model = joblib.load(model_path)
+                _CACHED_FORECAST_MODEL = model
             except Exception:
-                model = train_and_save_monthly_inventory_model(db=db, model_path=model_path)
+                pass
+        if model is None:
+            try:
+                from track_inventory import load_registered_inventory_model
+                model = load_registered_inventory_model(model_name="InventoryForecast")
+                if model is not None:
+                    _CACHED_FORECAST_MODEL = model
+            except Exception:
+                pass
+        if model is None:
+            model = train_and_save_monthly_inventory_model(db=db, model_path=model_path)
+            _CACHED_FORECAST_MODEL = model
 
     prediction = model.predict([[month]])
     pred_val = round(float(prediction[0]), 2)

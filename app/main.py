@@ -17,6 +17,7 @@ from app.routes import (
     recommendation_routes,
     revenue_routes,
     forecast_routes,
+    report_routes,
 )
 
 app = FastAPI(
@@ -41,6 +42,7 @@ app.include_router(forecast_routes.router)
 app.include_router(customer_routes.router)
 app.include_router(recommendation_routes.router)
 app.include_router(recommendation_routes.recommend_router)
+app.include_router(report_routes.router)
 
 
 @app.get("/", tags=["Health"])
