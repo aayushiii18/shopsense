@@ -200,3 +200,59 @@ def analytics_summary(db: Session = Depends(get_db)):
             "total_revenue": round(float(top_vendor["amount"]), 2),
         },
     }
+
+
+@router.get("/transactions", summary="List transactions with joined product and vendor details")
+def list_transactions(limit: int = 200, db: Session = Depends(get_db)):
+    """Return recent transaction records with join details for admin inspection."""
+    rows = (
+        db.query(
+            Transaction.transaction_id,
+            Transaction.product_id,
+            Product.name.label("product_name"),
+            Product.category.label("category"),
+            Transaction.vendor_id,
+            Vendor.name.label("vendor_name"),
+            Transaction.customer_id,
+            Transaction.quantity,
+            Transaction.unit_price,
+            Transaction.amount,
+            Transaction.transaction_date,
+        )
+        .join(Product, Transaction.product_id == Product.id)
+        .join(Vendor, Transaction.vendor_id == Vendor.id)
+        .order_by(Transaction.transaction_date.desc())
+        .limit(limit)
+        .all()
+    )
+    return [
+        {
+            "transaction_id": r.transaction_id,
+            "product_id": r.product_id,
+            "product_name": r.product_name,
+            "category": r.category or "General",
+            "vendor_id": r.vendor_id,
+            "vendor_name": r.vendor_name,
+            "customer_id": r.customer_id,
+            "quantity": r.quantity,
+            "unit_price": float(r.unit_price) if r.unit_price is not None else round(float(r.amount) / r.quantity, 2),
+            "amount": float(r.amount),
+            "transaction_date": r.transaction_date.isoformat() if r.transaction_date else None,
+        }
+        for r in rows
+    ]
+
+
+@router.get("/pipeline/audit", summary="Get automated analytical pipeline audit records")
+def get_pipeline_audit_logs(limit: int = 10, db: Session = Depends(get_db)):
+    """Returns recent audit execution records for the background analytical pipeline."""
+    from app.scheduler import get_workflow_audit_logs
+    return get_workflow_audit_logs(db=db, limit=limit)
+
+
+@router.post("/pipeline/run", summary="Trigger manual run of the analytical pipeline")
+def trigger_pipeline_run(db: Session = Depends(get_db)):
+    """Manually triggers the full analytical pipeline and records execution in the audit log."""
+    from app.scheduler import run_analytical_pipeline
+    report = run_analytical_pipeline(db=db)
+    return report

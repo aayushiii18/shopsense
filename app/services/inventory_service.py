@@ -10,7 +10,9 @@ Features:
   6. Dynamic Replenishment Recommendations (ROP, Safety Stock, Recommended Order Qty).
 """
 
+import os
 import math
+from typing import Optional
 from datetime import datetime, timedelta
 import numpy as np
 import pandas as pd
@@ -613,4 +615,89 @@ def forecast_product_demand(db: Session, product_id: int, forecast_days: int = 1
         },
         "historical_daily": historical_points,
         "forecast": forecast_results,
+    }
+
+
+def train_and_save_monthly_inventory_model(
+    db: Optional[Session] = None,
+    model_path: str = "models/inventory_model.pkl",
+):
+    """
+    Trains a RandomForestRegressor model on monthly aggregate demand volume
+    and serializes the artifact using joblib to `models/inventory_model.pkl`.
+    Used by GET /forecast/{month} and registered with MLflow in Module 3.
+    """
+    import joblib
+    from sklearn.ensemble import RandomForestRegressor
+
+    # Fallback default seasonal volume if DB is empty or unavailable
+    monthly_data = {
+        1: 54.0, 2: 80.0, 3: 73.0, 4: 55.0, 5: 74.0, 6: 100.0,
+        7: 91.0, 8: 66.0, 9: 60.0, 10: 108.0, 11: 86.0, 12: 95.0,
+    }
+
+    if db is not None:
+        try:
+            txns = db.query(Transaction.quantity, Transaction.transaction_date).all()
+            if txns:
+                df = pd.DataFrame([
+                    {"quantity": int(t.quantity), "month": t.transaction_date.month}
+                    for t in txns if t.transaction_date is not None
+                ])
+                if not df.empty and df["month"].nunique() >= 2:
+                    agg = df.groupby("month")["quantity"].sum().to_dict()
+                    for m, q in agg.items():
+                        monthly_data[m] = float(q)
+        except Exception:
+            pass
+
+    X = np.array([[m] for m in range(1, 13)])
+    y = np.array([monthly_data.get(m, 75.0) for m in range(1, 13)])
+
+    model = RandomForestRegressor(n_estimators=100, random_state=42)
+    model.fit(X, y)
+
+    os.makedirs(os.path.dirname(os.path.abspath(model_path)), exist_ok=True)
+    joblib.dump(model, model_path)
+    return model
+
+
+def predict_monthly_demand(
+    month: int,
+    db: Optional[Session] = None,
+    model_path: str = "models/inventory_model.pkl",
+) -> dict:
+    """
+    Returns predicted inventory demand units for a given month index (1-12 or future month 13-24).
+    Validates month parameter and utilizes the serialized RandomForest model.
+    """
+    import joblib
+
+    if month < 1 or month > 24:
+        raise ValueError(f"Invalid month {month}: must be between 1 and 24.")
+
+    model = None
+    try:
+        from track_inventory import load_registered_inventory_model
+        model = load_registered_inventory_model(model_name="InventoryForecast")
+    except Exception:
+        model = None
+
+    if model is None:
+        if not os.path.exists(model_path):
+            model = train_and_save_monthly_inventory_model(db=db, model_path=model_path)
+        else:
+            try:
+                model = joblib.load(model_path)
+            except Exception:
+                model = train_and_save_monthly_inventory_model(db=db, model_path=model_path)
+
+    prediction = model.predict([[month]])
+    pred_val = round(float(prediction[0]), 2)
+
+    return {
+        "month": month,
+        "forecast": pred_val,
+        "units_predicted": int(round(pred_val)),
+        "model_name": "RandomForest",
     }

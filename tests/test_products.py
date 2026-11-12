@@ -132,3 +132,21 @@ def test_list_products_empty(client):
     resp = client.get("/products/")
     assert resp.status_code == 200
     assert resp.json() == []
+
+
+def test_update_product_success(client):
+    vendor_id = _create_vendor(client)
+    created = client.post("/products/", json=_valid_product(vendor_id)).json()
+
+    update_resp = client.put(f"/products/{created['id']}", json={
+        "name": "Updated Laptop Stand",
+        "price": 1499.00,
+    })
+    assert update_resp.status_code == 200
+    assert update_resp.json()["name"] == "Updated Laptop Stand"
+    assert update_resp.json()["price"] == 1499.00
+
+
+def test_update_product_not_found(client):
+    resp = client.put("/products/99999", json={"price": 99.0})
+    assert resp.status_code == 404

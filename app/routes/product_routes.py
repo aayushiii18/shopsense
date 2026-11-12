@@ -4,6 +4,7 @@ routes/product_routes.py — FastAPI endpoints for product catalog management.
 POST /products/       Register a new product (must reference an existing vendor)
 GET  /products/       List all products (paginated, optional vendor filter)
 GET  /products/{id}   Get a single product by ID
+PUT  /products/{id}   Update an existing product
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query
@@ -12,7 +13,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.product import Product
 from app.models.vendor import Vendor
-from app.schemas.product_schema import ProductCreate, ProductResponse
+from app.schemas.product_schema import ProductCreate, ProductUpdate, ProductResponse
 
 router = APIRouter(prefix="/products", tags=["Products"])
 
@@ -83,4 +84,39 @@ def get_product(product_id: int, db: Session = Depends(get_db)):
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Product with id={product_id} not found.",
         )
+    return product
+
+
+@router.put(
+    "/{product_id}",
+    response_model=ProductResponse,
+    summary="Update product details",
+)
+def update_product(product_id: int, payload: ProductUpdate, db: Session = Depends(get_db)):
+    """Update an existing product's name, price, description, category, or vendor."""
+    product = db.query(Product).filter(Product.id == product_id).first()
+    if not product:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Product with id={product_id} not found.",
+        )
+    if payload.vendor_id is not None:
+        vendor = db.query(Vendor).filter(Vendor.id == payload.vendor_id).first()
+        if not vendor:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Vendor with id={payload.vendor_id} not found.",
+            )
+        product.vendor_id = payload.vendor_id
+    if payload.name:
+        product.name = payload.name
+    if payload.description is not None:
+        product.description = payload.description
+    if payload.price is not None:
+        product.price = payload.price
+    if payload.category is not None:
+        product.category = payload.category
+
+    db.commit()
+    db.refresh(product)
     return product

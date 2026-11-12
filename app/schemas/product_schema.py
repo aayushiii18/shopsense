@@ -50,6 +50,36 @@ class ProductCreate(BaseModel):
         return v
 
 
+class ProductUpdate(BaseModel):
+    """Schema used when updating an existing product."""
+
+    name: str | None = None
+    description: str | None = None
+    price: float | None = None
+    category: str | None = None
+    vendor_id: int | None = None
+
+    @field_validator("name")
+    @classmethod
+    def name_must_not_be_blank(cls, v: str | None) -> str | None:
+        if v is not None:
+            v = v.strip()
+            if not v:
+                raise ValueError("Product name must not be blank.")
+            if len(v) > 200:
+                raise ValueError("Product name must be 200 characters or fewer.")
+        return v
+
+    @field_validator("price")
+    @classmethod
+    def price_must_be_positive(cls, v: float | None) -> float | None:
+        if v is not None:
+            if v <= 0:
+                raise ValueError("Price must be greater than zero.")
+            return round(v, 2)
+        return v
+
+
 class ProductResponse(BaseModel):
     """Schema returned to the client after product creation or lookup."""
 

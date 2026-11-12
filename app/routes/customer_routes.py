@@ -12,9 +12,17 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.services import customer_service
+from app.services import customer_service, revenue_service
+from app.schemas.revenue_schema import CustomerMetricsResponse
 
 router = APIRouter(prefix="/analytics/customers", tags=["Customer Analytics"])
+
+
+@router.get("", response_model=CustomerMetricsResponse, summary="Customer Metrics & Average Spend")
+@router.get("/", response_model=CustomerMetricsResponse, include_in_schema=False)
+def customer_metrics(db: Session = Depends(get_db)):
+    """Returns total registered customer count and average customer spending."""
+    return revenue_service.get_customer_metrics(db)
 
 
 @router.get("/summary", summary="Customer Base Summary & Lifetime Value")

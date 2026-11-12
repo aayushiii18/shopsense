@@ -12,8 +12,53 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.services import recommendation_service
+from app.schemas.revenue_schema import SingleRecommendationResponse
 
 router = APIRouter(prefix="/recommendations", tags=["Recommendation Engine"])
+recommend_router = APIRouter(tags=["Recommendation Engine"])
+
+
+@recommend_router.get(
+    "/recommend/{customer_id}",
+    response_model=SingleRecommendationResponse,
+    summary="Top Recommended Product for Customer",
+)
+def recommend(customer_id: int, db: Session = Depends(get_db)):
+    """
+    Returns the customer's dynamically generated recommended product
+    using Item-Based Collaborative Filtering (with popularity fallback).
+    Returns 404 if customer is not found.
+    """
+    try:
+        res = recommendation_service.get_personalized_recommendations(
+            db, customer_id=customer_id, top_n=1, exclude_purchased=False
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    recs = res.get("recommendations", [])
+    if recs:
+        top_rec = recs[0]
+        return {
+            "customer": customer_id,
+            "recommended_product": top_rec["product_name"],
+            "customer_name": res.get("customer_name"),
+            "category": top_rec.get("category"),
+            "score": top_rec.get("score"),
+            "is_personalized": res.get("is_personalized", True),
+        }
+    else:
+        pop = recommendation_service.get_popular_products(db, top_n=1)
+        top_name = pop[0]["product_name"] if pop else "Standard Catalog Item"
+        return {
+            "customer": customer_id,
+            "recommended_product": top_name,
+            "customer_name": res.get("customer_name"),
+            "category": "General",
+            "score": 1.0,
+            "is_personalized": False,
+        }
+
 
 
 @router.get("/customer/{customer_id}", summary="Personalized Top-N Product Recommendations")

@@ -58,6 +58,54 @@ class VendorCreate(BaseModel):
         return v
 
 
+class VendorUpdate(BaseModel):
+    """Schema used when updating an existing vendor."""
+
+    name: str | None = None
+    email: EmailStr | None = None
+    phone: str | None = None
+    address: str | None = None
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalise_email(cls, v: str | None) -> str | None:
+        if isinstance(v, str):
+            return v.lower().strip()
+        return v
+
+    @field_validator("name")
+    @classmethod
+    def name_must_not_be_blank(cls, v: str | None) -> str | None:
+        if v is not None:
+            v = v.strip()
+            if not v:
+                raise ValueError("Vendor name must not be blank.")
+            if len(v) > 150:
+                raise ValueError("Vendor name must be 150 characters or fewer.")
+        return v
+
+    @field_validator("phone")
+    @classmethod
+    def phone_must_be_valid(cls, v: str | None) -> str | None:
+        if v is not None:
+            v = v.strip()
+            if not v:
+                raise ValueError("Phone number must not be blank.")
+            if not re.fullmatch(r"[\d\s\-\+\(\)]{7,20}", v):
+                raise ValueError(
+                    "Phone number must be 7–20 characters and contain only digits, "
+                    "spaces, hyphens, plus signs, or parentheses."
+                )
+        return v
+
+    @field_validator("address")
+    @classmethod
+    def address_length(cls, v: str | None) -> str | None:
+        if v is not None and len(v.strip()) > 400:
+            raise ValueError("Address must be 400 characters or fewer.")
+        return v
+
+
 class VendorResponse(BaseModel):
     """Schema returned to the client after vendor creation or lookup."""
 

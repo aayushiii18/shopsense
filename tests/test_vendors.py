@@ -156,3 +156,25 @@ def test_list_vendors_empty(client):
     resp = client.get("/vendors/")
     assert resp.status_code == 200
     assert resp.json() == []
+
+
+def test_update_vendor_success(client):
+    created = client.post("/vendors/", json={
+        "name": "Original Vendor",
+        "email": "orig@test.com",
+        "phone": "+91-9876543210",
+    }).json()
+
+    update_resp = client.put(f"/vendors/{created['id']}", json={
+        "name": "Updated Vendor",
+        "phone": "+91-9999999999",
+    })
+    assert update_resp.status_code == 200
+    assert update_resp.json()["name"] == "Updated Vendor"
+    assert update_resp.json()["phone"] == "+91-9999999999"
+    assert update_resp.json()["email"] == "orig@test.com"
+
+
+def test_update_vendor_not_found(client):
+    resp = client.put("/vendors/99999", json={"name": "Ghost"})
+    assert resp.status_code == 404

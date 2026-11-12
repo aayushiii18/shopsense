@@ -6,6 +6,7 @@ from app.models.transaction import Transaction
 from app.models.customer import Customer
 from app.models.stock_movement import StockMovement
 from app.models.customer_interaction import CustomerInteraction
+from app.models.workflow_audit import WorkflowAuditLog
 
 __all__ = [
     "Vendor",
@@ -15,4 +16,5 @@ __all__ = [
     "Customer",
     "StockMovement",
     "CustomerInteraction",
+    "WorkflowAuditLog",
 ]

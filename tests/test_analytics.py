@@ -151,3 +151,17 @@ def test_summary_report_correct(client, db_session):
     assert data["top_selling_product"] is not None
     assert data["top_selling_product"]["product_id"] == expected["top_seller_id"]
     assert data["top_vendor_by_revenue"]["vendor_id"] == expected["v1_id"]
+
+
+def test_list_transactions(client, db_session):
+    _seed_data(db_session)
+    resp = client.get("/analytics/transactions?limit=10")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 5
+    first = data[0]
+    assert "transaction_id" in first
+    assert "product_name" in first
+    assert "vendor_name" in first
+    assert "amount" in first
+    assert "quantity" in first
