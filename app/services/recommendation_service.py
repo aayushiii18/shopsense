@@ -374,11 +374,69 @@ def evaluate_recommendation_engine(db: Session, k: int = 5) -> dict:
     mean_recall = round(float(np.mean(recalls)), 4)
     hit_rate = round(float(np.mean(hits)), 4)
 
+    # Multi-cutoff metrics for K=3 and K=5
+    hits_3, recalls_3, prec_3 = [], [], []
+    hits_5, recalls_5, prec_5 = [], [], []
+
+    for cust_id in eval_users:
+        t_test = test_sets[cust_id]
+        profile = user_profiles.get(cust_id, {})
+        interacted_in_train = {p for p, w in profile.items() if w > 0}
+
+        candidate_scores = {}
+        for p_cand in all_product_ids:
+            if p_cand in interacted_in_train:
+                continue
+            num, denom = 0.0, 0.0
+            for p_user, rating in profile.items():
+                if rating > 0 and p_user in item_sim and p_cand in item_sim[p_user]:
+                    sim = item_sim[p_user][p_cand]
+                    if sim > 0:
+                        num += sim * rating
+                        denom += sim
+            candidate_scores[p_cand] = (num / denom) if denom > 0 else 0.0
+
+        sorted_cand = [p for p, _ in sorted(candidate_scores.items(), key=lambda x: x[1], reverse=True)]
+        
+        # K=3
+        top_3 = sorted_cand[:3]
+        m3 = len(set(top_3) & t_test)
+        hits_3.append(1.0 if m3 > 0 else 0.0)
+        recalls_3.append(m3 / float(len(t_test)))
+        prec_3.append(m3 / 3.0)
+
+        # K=5
+        top_5 = sorted_cand[:5]
+        m5 = len(set(top_5) & t_test)
+        hits_5.append(1.0 if m5 > 0 else 0.0)
+        recalls_5.append(m5 / float(len(t_test)))
+        prec_5.append(m5 / 5.0)
+
+    hr3 = round(float(np.mean(hits_3)), 4)
+    rec3 = round(float(np.mean(recalls_3)), 4)
+    p3 = round(float(np.mean(prec_3)), 4)
+    hr5 = round(float(np.mean(hits_5)), 4)
+    rec5 = round(float(np.mean(recalls_5)), 4)
+    p5 = round(float(np.mean(prec_5)), 4)
+
     return {
         "evaluation_k": k,
         "sample_size_users": len(eval_users),
         "mean_precision_at_k": mean_precision,
         "mean_recall_at_k": mean_recall,
         "hit_rate_at_k": hit_rate,
+        "hit_rate_at_3": hr3,
+        "recall_at_3": rec3,
+        "precision_at_3": p3,
+        "hit_rate_at_5": hr5,
+        "recall_at_5": rec5,
+        "precision_at_5": p5,
+        "relevance_target_pct": 75.0,
+        "relevance_target_met": (hr3 >= 0.75 and rec3 >= 0.75),
+        "evaluation_cohort": f"{len(eval_users)} customers with >= 3 distinct chronological interactions",
         "split_method": "Chronological Leave-20%-Out Holdout (Zero Lookahead Bias)",
+        "precision_bounds_explanation": (
+            "Precision@K is mathematically bounded by min(1.0, |T_test| / K). Since each user has on "
+            "average 1-2 held-out items, the maximum possible precision is capped by ground truth sparsity at |T_test| / K."
+        ),
     }

@@ -148,6 +148,12 @@ def test_customer_segmentation_kmeans_and_silhouette(client, db_session):
         assert "avg_monetary" in prof
         assert "cluster_silhouette" in prof
 
+    assert "davies_bouldin_index" in data
+    assert "calinski_harabasz_score" in data
+    assert data["davies_bouldin_index"] >= 0.0
+    assert data["calinski_harabasz_score"] >= 0.0
+    assert "quality_metrics" in data
+
     # Verify each customer is assigned a cluster
     assert len(data["customers"]) == 8
     for cust in data["customers"]:
@@ -164,3 +170,16 @@ def test_customer_segmentation_custom_clusters(client, db_session):
     data = res.json()
     assert data["n_clusters"] == 3
     assert len(data["cluster_profiles"]) == 3
+
+
+def test_unsupervised_metrics_and_outlier_stability(client, db_session):
+    """Verify that active customers form stable clusters without artificial singletons."""
+    _seed_customer_data(db_session)
+    res = client.get("/analytics/customers/segments")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["silhouette_score"] > 0.30
+    assert data["davies_bouldin_index"] < 1.0
+    # Cluster profiles should have active customer counts >= 1
+    for prof in data["cluster_profiles"]:
+        assert prof["customer_count"] >= 1

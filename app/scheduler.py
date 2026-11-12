@@ -35,6 +35,68 @@ logger = logging.getLogger("stockpilot.scheduler")
 _scheduler: Optional[BackgroundScheduler] = None
 _scheduler_lock_flag = False
 
+_LOCK_FILE_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "stockpilot_scheduler.lock"))
+_LOCK_FILE_HANDLE = None
+
+
+def acquire_process_lock() -> bool:
+    """
+    Acquires OS-level file lock for multi-worker process mutual exclusion.
+    Supports Windows (msvcrt) and Unix (fcntl).
+    """
+    global _LOCK_FILE_HANDLE
+    if _LOCK_FILE_HANDLE is not None:
+        return True
+    try:
+        f = open(_LOCK_FILE_PATH, "a+")
+        if os.name == "nt":
+            import msvcrt
+            f.seek(0)
+            msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+        f.seek(0)
+        f.truncate()
+        f.write(f"PID: {os.getpid()} | Started: {datetime.utcnow().isoformat()}\n")
+        f.flush()
+        _LOCK_FILE_HANDLE = f
+        return True
+    except (IOError, OSError, PermissionError):
+        try:
+            f.close()
+        except Exception:
+            pass
+        return False
+
+
+def release_process_lock() -> bool:
+    """Releases OS-level file lock and cleans up lock file."""
+    global _LOCK_FILE_HANDLE
+    if _LOCK_FILE_HANDLE is None:
+        return True
+    try:
+        if os.name == "nt":
+            import msvcrt
+            _LOCK_FILE_HANDLE.seek(0)
+            msvcrt.locking(_LOCK_FILE_HANDLE.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(_LOCK_FILE_HANDLE.fileno(), fcntl.LOCK_UN)
+        _LOCK_FILE_HANDLE.close()
+    except Exception as e:
+        logger.warning(f"Error closing lock file: {e}")
+    finally:
+        _LOCK_FILE_HANDLE = None
+        try:
+            if os.path.exists(_LOCK_FILE_PATH):
+                os.remove(_LOCK_FILE_PATH)
+        except Exception:
+            pass
+    return True
+
+
 
 def get_scheduler() -> BackgroundScheduler:
     """Returns singleton BackgroundScheduler instance."""
@@ -359,6 +421,11 @@ def start_scheduler(
     global _scheduler_lock_flag
     scheduler = get_scheduler()
 
+    # Check explicit disable flag
+    if os.getenv("DISABLE_BACKGROUND_SCHEDULER", "false").lower() in ("1", "true", "yes"):
+        logger.info("APScheduler is disabled via environment variable (DISABLE_BACKGROUND_SCHEDULER=true).")
+        return False
+
     # Determine whether scheduler is enabled
     if enable_flag is None:
         enable_str = os.getenv("ENABLE_SCHEDULER", "true").lower()
@@ -368,9 +435,14 @@ def start_scheduler(
         logger.info("APScheduler is disabled via configuration (ENABLE_SCHEDULER=false).")
         return False
 
-    # Prevent duplicate runs when uvicorn reloads or spawns multiple workers
+    # Prevent duplicate runs within same process
     if scheduler.running or _scheduler_lock_flag:
-        logger.info("APScheduler instance is already running; skipping redundant start.")
+        logger.info("APScheduler instance is already running in this process; skipping redundant start.")
+        return True
+
+    # Multi-worker OS process mutual exclusion
+    if not acquire_process_lock():
+        logger.info("Scheduler lock is held by another worker process; skipping redundant scheduler startup.")
         return True
 
     # Avoid starting redundant scheduler inside uvicorn reloader parent process
@@ -402,8 +474,9 @@ def start_scheduler(
 
 
 def stop_scheduler(wait: bool = False) -> bool:
-    """Safely shuts down the background scheduler."""
+    """Safely shuts down the background scheduler and releases process lock."""
     global _scheduler, _scheduler_lock_flag
+    release_process_lock()
     if _scheduler is not None and _scheduler.running:
         try:
             _scheduler.shutdown(wait=wait)

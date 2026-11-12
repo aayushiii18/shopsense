@@ -147,4 +147,10 @@ def test_recommendation_offline_evaluation(client, db_session):
     assert 0.0 <= data["mean_precision_at_k"] <= 1.0
     assert 0.0 <= data["mean_recall_at_k"] <= 1.0
     assert 0.0 <= data["hit_rate_at_k"] <= 1.0
+    assert "hit_rate_at_3" in data
+    assert "recall_at_3" in data
+    assert "precision_at_3" in data
+    assert "hit_rate_at_5" in data
+    assert "relevance_target_met" in data
+    assert "precision_bounds_explanation" in data
     assert "Chronological" in data["split_method"]

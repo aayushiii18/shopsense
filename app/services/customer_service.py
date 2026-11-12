@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import KMeans
-from sklearn.metrics import silhouette_score, silhouette_samples
+from sklearn.metrics import silhouette_score, silhouette_samples, davies_bouldin_score, calinski_harabasz_score
 
 from app.models.customer import Customer
 from app.models.transaction import Transaction
@@ -235,8 +235,10 @@ def segment_customers(db: Session, n_clusters: int | None = None) -> dict:
     kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
     df["cluster"] = kmeans.fit_predict(X_scaled)
 
-    # Compute overall and per-sample silhouette scores
+    # Compute overall and per-sample silhouette scores along with Davies-Bouldin and Calinski-Harabasz indices
     overall_silhouette = round(float(silhouette_score(X_scaled, df["cluster"])), 3)
+    db_index = round(float(davies_bouldin_score(X_scaled, df["cluster"])), 3)
+    ch_index = round(float(calinski_harabasz_score(X_scaled, df["cluster"])), 2)
     sample_sils = silhouette_samples(X_scaled, df["cluster"])
     df["silhouette"] = [round(float(s), 3) for s in sample_sils]
 
@@ -305,6 +307,17 @@ def segment_customers(db: Session, n_clusters: int | None = None) -> dict:
     return {
         "n_clusters": n_clusters,
         "silhouette_score": overall_silhouette,
+        "davies_bouldin_index": db_index,
+        "calinski_harabasz_score": ch_index,
+        "quality_metrics": {
+            "silhouette_score": overall_silhouette,
+            "davies_bouldin_index": db_index,
+            "calinski_harabasz_score": ch_index,
+            "interpretation": (
+                "Silhouette > 0.50 and Davies-Bouldin < 0.60 indicate strong cluster separation "
+                "and compact within-cluster variance. Supervised accuracy is not applicable to unsupervised clustering."
+            ),
+        },
         "algorithm": "K-Means (StandardScaler normalized)",
         "cluster_profiles": sorted(cluster_profiles, key=lambda x: -x["avg_monetary"]),
         "customers": full_results,

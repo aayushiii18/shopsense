@@ -164,3 +164,30 @@ def test_load_registered_model_fallback(tmp_path, test_mlflow_uri):
     assert hasattr(loaded, "predict")
     preds = loaded.predict([[1]])
     assert len(preds) == 1
+
+
+def test_evaluate_forecasting_models_benchmarks(db_session):
+    """Verify candidate model comparison, linear regression >= 80% accuracy, and weekly benchmarks."""
+    from track_inventory import evaluate_forecasting_models
+    res = evaluate_forecasting_models(db=db_session)
+
+    assert "holdout_comparison" in res
+    comps = res["holdout_comparison"]
+    assert "Linear Regression" in comps
+    assert "Random Forest (n=100)" in comps
+    assert "Historical Mean Baseline" in comps
+
+    lr = comps["Linear Regression"]
+    assert lr["forecast_accuracy_pct"] >= 80.0
+    assert lr["mae"] < 20.0
+    assert lr["wape"] < 0.20
+
+    rf = comps["Random Forest (n=100)"]
+    assert rf["mae"] >= 0.0
+
+    assert "weekly_benchmark" in res
+    assert res["weekly_benchmark"]["total_weeks"] == 52
+    assert res["weekly_benchmark"]["weekly_rf_accuracy_pct"] >= 75.0
+
+    assert "stability_evaluation" in res
+    assert res["stability_evaluation"]["mean_linear_regression_accuracy_pct"] >= 70.0

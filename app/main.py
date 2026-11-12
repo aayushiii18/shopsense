@@ -56,6 +56,8 @@ def startup_event():
     """Starts APScheduler background scheduler on FastAPI startup if enabled."""
     import os
     import sys
+    if os.getenv("DISABLE_BACKGROUND_SCHEDULER", "false").lower() in ("1", "true", "yes"):
+        return
     if os.getenv("ENABLE_AUTO_SCHEDULER", "true").lower() in ("1", "true", "yes"):
         if "pytest" not in sys.modules:
             from app.scheduler import start_scheduler

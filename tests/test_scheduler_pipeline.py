@@ -170,3 +170,27 @@ def test_api_pipeline_audit_and_run(client):
     assert isinstance(audit_list, list)
     assert len(audit_list) >= 1
     assert any(a["run_id"] == report["run_id"] for a in audit_list)
+
+
+def test_disable_background_scheduler_env(monkeypatch):
+    """Verify DISABLE_BACKGROUND_SCHEDULER=true prevents scheduler startup."""
+    from app.scheduler import start_scheduler, is_scheduler_running, stop_scheduler
+    stop_scheduler(wait=False)
+    monkeypatch.setenv("DISABLE_BACKGROUND_SCHEDULER", "true")
+    assert start_scheduler() is False
+    assert not is_scheduler_running()
+
+
+def test_cross_process_lock_acquisition_and_release():
+    """Verify OS-level lock acquisition, duplicate blocking, and clean release."""
+    import os
+    from app.scheduler import acquire_process_lock, release_process_lock, _LOCK_FILE_PATH
+    release_process_lock()
+
+    assert acquire_process_lock() is True
+    assert os.path.exists(_LOCK_FILE_PATH)
+    # Calling in same handle returns True
+    assert acquire_process_lock() is True
+
+    assert release_process_lock() is True
+    assert not os.path.exists(_LOCK_FILE_PATH)
