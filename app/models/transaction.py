@@ -1,12 +1,13 @@
 """
 models/transaction.py — ORM model for the transactions table.
 
-Records each sale event. The amount field represents the total monetary value
+Records each sale event. The amount field represents the gross monetary value
 of the transaction (quantity * unit_price).
+Supports discount allocations, payment methods, payment status, snapshotted commission rate, and refund history.
 """
 
 from datetime import datetime
-from sqlalchemy import Integer, Float, DateTime, ForeignKey, func, CheckConstraint
+from sqlalchemy import Integer, Float, String, DateTime, ForeignKey, func, CheckConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship, synonym
 from app.database import Base
 
@@ -18,6 +19,7 @@ class Transaction(Base):
         CheckConstraint("quantity > 0", name="ck_transaction_quantity_positive"),
         CheckConstraint("unit_price > 0", name="ck_transaction_unit_price_positive"),
         CheckConstraint("amount > 0", name="ck_transaction_amount_positive"),
+        CheckConstraint("discount_amount >= 0", name="ck_transaction_discount_nonnegative"),
     )
 
     transaction_id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
@@ -33,6 +35,10 @@ class Transaction(Base):
     quantity: Mapped[int] = mapped_column(Integer, nullable=False)
     unit_price: Mapped[float] = mapped_column(Float, nullable=False)
     amount: Mapped[float] = mapped_column(Float, nullable=False)
+    discount_amount: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    payment_method: Mapped[str] = mapped_column(String(50), default="UNKNOWN", nullable=False)
+    payment_status: Mapped[str] = mapped_column(String(50), default="COMPLETED", nullable=False)
+    effective_commission_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
     transaction_date: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), nullable=False
     )
@@ -44,9 +50,12 @@ class Transaction(Base):
     product: Mapped["Product"] = relationship("Product", back_populates="transactions")  # noqa: F821
     vendor: Mapped["Vendor"] = relationship("Vendor", back_populates="transactions")  # noqa: F821
     customer: Mapped["Customer | None"] = relationship("Customer", back_populates="transactions")  # noqa: F821
+    refunds: Mapped[list["Refund"]] = relationship(  # noqa: F821
+        "Refund", back_populates="transaction", cascade="all, delete-orphan"
+    )
 
     def __repr__(self) -> str:
         return (
             f"<Transaction transaction_id={self.transaction_id} product_id={self.product_id} "
-            f"quantity={self.quantity} amount={self.amount}>"
+            f"quantity={self.quantity} amount={self.amount} status={self.payment_status}>"
         )

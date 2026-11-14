@@ -217,6 +217,8 @@ def list_transactions(limit: int = 200, db: Session = Depends(get_db)):
             Transaction.quantity,
             Transaction.unit_price,
             Transaction.amount,
+            Transaction.payment_method,
+            Transaction.payment_status,
             Transaction.transaction_date,
         )
         .join(Product, Transaction.product_id == Product.id)
@@ -237,6 +239,8 @@ def list_transactions(limit: int = 200, db: Session = Depends(get_db)):
             "quantity": r.quantity,
             "unit_price": float(r.unit_price) if r.unit_price is not None else round(float(r.amount) / r.quantity, 2),
             "amount": float(r.amount),
+            "payment_method": getattr(r, "payment_method", "UNKNOWN") or "UNKNOWN",
+            "payment_status": getattr(r, "payment_status", "COMPLETED") or "COMPLETED",
             "transaction_date": r.transaction_date.isoformat() if r.transaction_date else None,
         }
         for r in rows

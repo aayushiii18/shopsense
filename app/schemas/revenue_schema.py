@@ -1,8 +1,9 @@
 """
-schemas/revenue_schema.py — Pydantic models for Advanced Revenue Analysis and Analytics Services.
-Milestone 3 Modules 1 & 2.
+schemas/revenue_schema.py — Pydantic models for Advanced Revenue Analysis, Analytics Services,
+and Stage 4 Financial & Commerce Operations.
 """
 
+from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field
 from typing import List, Optional
 
@@ -83,3 +84,73 @@ class SingleRecommendationResponse(BaseModel):
     category: Optional[str] = Field(None, description="Product category")
     score: Optional[float] = Field(None, description="Collaborative similarity score")
     is_personalized: Optional[bool] = Field(True, description="True if personalized collaborative, False if cold-start")
+
+
+# ── Stage 4 Commerce & Financial Schemas ────────────────────────────────────
+
+class ProfitMarginResponse(BaseModel):
+    """Schema for GET /analytics/revenue/profit-margins."""
+    gross_sales_gmv: float = Field(..., description="Total gross merchandise value")
+    discounts_total: float = Field(..., description="Total discount amounts allocated")
+    refunds_total: float = Field(..., description="Total completed refunds deducted")
+    net_sales: float = Field(..., description="Net sales = Gross GMV - Discounts - Refunds")
+    cogs_coverage_pct: float = Field(..., description="Percentage of Net Sales with verified cost_price data")
+    covered_net_sales: float = Field(..., description="Net sales of catalog items with verified cost data")
+    covered_cogs: float = Field(..., description="Total cost of goods sold for covered items")
+    gross_profit_reported: float = Field(..., description="Gross profit for reported items only (covered_net_sales - covered_cogs)")
+    gross_margin_pct_reported: float = Field(..., description="Gross profit margin % for reported items")
+    coverage_status: str = Field(..., description="Status note regarding COGS data coverage")
+
+
+class CategoryRevenueItem(BaseModel):
+    """Schema for revenue breakdown by category."""
+    category: str
+    revenue: float
+    units_sold: int
+    order_count: int
+    share_pct: float
+
+
+class CategoryRevenueResponse(BaseModel):
+    """Schema for GET /analytics/revenue/by-category."""
+    total_revenue: float
+    categories: List[CategoryRevenueItem]
+
+
+class RegionalRevenueItem(BaseModel):
+    """Schema for revenue breakdown by customer geographical region."""
+    region: str
+    revenue: float
+    orders: int
+    unique_customers: int
+    share_pct: float
+
+
+class RegionalRevenueResponse(BaseModel):
+    """Schema for GET /analytics/revenue/by-region."""
+    total_revenue: float
+    regions: List[RegionalRevenueItem]
+
+
+class VendorSettlementItem(BaseModel):
+    """Schema for vendor payout and commission breakdown."""
+    vendor_id: int
+    vendor_name: str
+    status: str
+    commission_tier: str
+    commission_rate: float
+    gross_sales: float
+    discounts_allocated: float
+    refunds_deducted: float
+    net_sales: float
+    platform_commission: float
+    vendor_payout: float
+    orders_count: int
+
+
+class VendorSettlementResponse(BaseModel):
+    """Schema for GET /analytics/vendors/payouts."""
+    total_net_sales: float
+    total_platform_commission: float
+    total_vendor_payouts: float
+    settlements: List[VendorSettlementItem]

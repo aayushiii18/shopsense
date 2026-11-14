@@ -1,11 +1,13 @@
 """
 schemas/product_schema.py — Pydantic models for product request/response validation.
 
-ProductCreate  : fields required when registering a new product.
-ProductResponse: fields returned in API responses.
+ProductCreate  : fields required when registering a new product. Supports optional cost_price.
+ProductUpdate  : fields for updating product details.
+ProductResponse: fields returned in API responses including nullable cost_price.
 """
 
 from datetime import datetime
+from typing import Optional
 from pydantic import BaseModel, field_validator, ConfigDict
 
 
@@ -15,7 +17,9 @@ class ProductCreate(BaseModel):
     name: str
     description: str | None = None
     price: float
+    cost_price: float | None = None
     category: str | None = None
+    parent_category: str | None = None
     vendor_id: int
 
     @field_validator("name")
@@ -34,6 +38,15 @@ class ProductCreate(BaseModel):
         if v <= 0:
             raise ValueError("Price must be greater than zero.")
         return round(v, 2)
+
+    @field_validator("cost_price")
+    @classmethod
+    def cost_price_positive_if_given(cls, v: float | None) -> float | None:
+        if v is not None:
+            if v <= 0:
+                raise ValueError("cost_price must be greater than zero if provided.")
+            return round(v, 2)
+        return v
 
     @field_validator("description")
     @classmethod
@@ -56,7 +69,9 @@ class ProductUpdate(BaseModel):
     name: str | None = None
     description: str | None = None
     price: float | None = None
+    cost_price: float | None = None
     category: str | None = None
+    parent_category: str | None = None
     vendor_id: int | None = None
 
     @field_validator("name")
@@ -79,6 +94,15 @@ class ProductUpdate(BaseModel):
             return round(v, 2)
         return v
 
+    @field_validator("cost_price")
+    @classmethod
+    def cost_price_positive_if_given(cls, v: float | None) -> float | None:
+        if v is not None:
+            if v <= 0:
+                raise ValueError("cost_price must be greater than zero if provided.")
+            return round(v, 2)
+        return v
+
 
 class ProductResponse(BaseModel):
     """Schema returned to the client after product creation or lookup."""
@@ -89,6 +113,8 @@ class ProductResponse(BaseModel):
     name: str
     description: str | None
     price: float
+    cost_price: float | None = None
     category: str | None
+    parent_category: str | None = None
     vendor_id: int
     created_at: datetime

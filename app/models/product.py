@@ -3,6 +3,7 @@ models/product.py — ORM model for the products table.
 
 Each product belongs to exactly one vendor and has an optional
 inventory record tracking its stock level.
+Supports nullable cost_price for verified COGS accounting.
 """
 
 from datetime import datetime
@@ -22,6 +23,7 @@ class Product(Base):
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     price: Mapped[float] = mapped_column(Float, nullable=False)
+    cost_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     category: Mapped[str | None] = mapped_column(String(100), nullable=True)
     parent_category: Mapped[str | None] = mapped_column(String(100), nullable=True)
     vendor_id: Mapped[int] = mapped_column(
@@ -47,4 +49,4 @@ class Product(Base):
     )
 
     def __repr__(self) -> str:
-        return f"<Product id={self.id} name={self.name!r} price={self.price}>"
+        return f"<Product id={self.id} name={self.name!r} price={self.price} cost_price={self.cost_price}>"

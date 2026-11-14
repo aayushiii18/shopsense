@@ -357,6 +357,35 @@ if selected_page == "📊 Dashboard":
 
     st.markdown("---")
 
+    # ── Stage 4 Audited Financial Performance & Margin Accounting ─────────────
+    st.subheader("💼 Financial Accounting & Margin Analysis (Stage 4)")
+    st.caption("Item-level audited gross profit, discount & refund deductions, and verified COGS data coverage.")
+
+    profit_data = api_get("/analytics/revenue/profit-margins") if is_live_api else None
+    if profit_data is None:
+        profit_data = {
+            "gross_sales_gmv": rev_val,
+            "discounts_total": 0.0,
+            "refunds_total": 0.0,
+            "net_sales": rev_val,
+            "cogs_coverage_pct": 0.0,
+            "covered_net_sales": 0.0,
+            "covered_cogs": 0.0,
+            "gross_profit_reported": 0.0,
+            "gross_margin_pct_reported": 0.0,
+            "coverage_status": "No historical cost data recorded (0.0% coverage). Actual profit uncalculated to prevent data fabrication.",
+        }
+
+    f1, f2, f3, f4 = st.columns(4)
+    f1.metric("💵 Net Sales", f"₹{profit_data.get('net_sales', 0.0):,.2f}", delta=f"GMV: ₹{profit_data.get('gross_sales_gmv', 0.0):,.2f}")
+    f2.metric("🏷️ Deductions (Disc & Ref)", f"₹{(profit_data.get('discounts_total', 0.0) + profit_data.get('refunds_total', 0.0)):,.2f}")
+    f3.metric("📊 Gross Profit (Reported)", f"₹{profit_data.get('gross_profit_reported', 0.0):,.2f}", delta=f"Margin: {profit_data.get('gross_margin_pct_reported', 0.0):.1f}%")
+    f4.metric("🛡️ COGS Data Coverage", f"{profit_data.get('cogs_coverage_pct', 0.0):.1f}%", help=profit_data.get("coverage_status", ""))
+
+    st.info(f"ℹ️ **COGS Audit Status:** {profit_data.get('coverage_status', '')}")
+
+    st.markdown("---")
+
     # ── Executive Intelligence Overview (Milestone 3 Module 5 Mockup Alignment) ──
     st.subheader("🧠 Executive Intelligence Overview (Milestone 3 Core Modules)")
     st.caption("Consolidated analytical intelligence: Customer Behavioral Segments, Recommendation Engine, and Demand Projections.")
@@ -534,6 +563,32 @@ if selected_page == "📊 Dashboard":
 
     st.markdown("---")
 
+    # Category & Regional Sales Distribution (Stage 4)
+    c_cat, c_reg = st.columns(2)
+    with c_cat:
+        st.subheader("🏷️ Revenue by Category")
+        cat_data = api_get("/analytics/revenue/by-category") if is_live_api else None
+        if cat_data and cat_data.get("categories"):
+            df_cat = pd.DataFrame(cat_data["categories"])
+            fig_cat = px.bar(df_cat, x="category", y="revenue", color="revenue", color_continuous_scale="Purples", labels={"revenue": "Revenue (₹)", "category": "Category"})
+            fig_cat.update_layout(margin=dict(l=20, r=20, t=30, b=30), showlegend=False, xaxis_tickangle=-20)
+            st.plotly_chart(fig_cat, use_container_width=True)
+        else:
+            st.info("No category revenue records available.")
+
+    with c_reg:
+        st.subheader("🗺️ Revenue by Customer Region")
+        reg_data = api_get("/analytics/revenue/by-region") if is_live_api else None
+        if reg_data and reg_data.get("regions"):
+            df_reg = pd.DataFrame(reg_data["regions"])
+            fig_reg = px.pie(df_reg, names="region", values="revenue", hole=0.4, color_discrete_sequence=px.colors.sequential.Viridis)
+            fig_reg.update_layout(margin=dict(l=20, r=20, t=30, b=30))
+            st.plotly_chart(fig_reg, use_container_width=True)
+        else:
+            st.info("No regional customer revenue records available.")
+
+    st.markdown("---")
+
     # Recent Transactions Feed
     st.subheader("⏱️ Recent Marketplace Activity")
     tx_recent = api_get("/analytics/transactions?limit=8") if is_live_api else None
@@ -574,12 +629,14 @@ elif selected_page == "🏢 Vendor Management":
 
     st.markdown("---")
 
-    tab_v_list, tab_v_add, tab_v_edit = st.tabs(["📋 Vendor Directory", "➕ Register Vendor", "✏️ Edit Vendor"])
+    tab_v_list, tab_v_add, tab_v_edit, tab_v_gov, tab_v_settle = st.tabs([
+        "📋 Vendor Directory", "➕ Register Vendor", "✏️ Edit Vendor", "🛡️ Lifecycle & Governance", "💰 Settlement Ledger"
+    ])
 
     with tab_v_list:
         st.subheader("All Registered Vendors")
         if not df_vendors.empty:
-            display_cols = [c for c in ["id", "name", "email", "phone", "address", "created_at"] if c in df_vendors.columns]
+            display_cols = [c for c in ["id", "name", "email", "phone", "status", "commission_tier", "commission_rate", "compliance_status", "created_at"] if c in df_vendors.columns]
             st.dataframe(df_vendors[display_cols], use_container_width=True)
         else:
             st.info("No vendors found.")
@@ -635,6 +692,55 @@ elif selected_page == "🏢 Vendor Management":
                         st.rerun()
                     else:
                         st.error(f"Failed to update vendor: {err}")
+
+    with tab_v_gov:
+        st.subheader("🛡️ Vendor Lifecycle Governance & State Machine")
+        st.caption("Control operational vendor status (ACTIVE, SUSPENDED, TERMINATED, REJECTED) and compliance auditing.")
+        if not is_live_api:
+            st.warning("⚠️ Vendor lifecycle management requires Live API mode.")
+        elif df_vendors.empty:
+            st.info("No vendors available.")
+        else:
+            vendor_map_gov = {row["id"]: f"{row['name']} (Current: {row.get('status', 'ACTIVE')})" for _, row in df_vendors.iterrows()}
+            selected_gov_id = st.selectbox("Select Vendor for Governance Review", options=list(vendor_map_gov.keys()), format_func=lambda x: vendor_map_gov[x], key="sb_gov_vendor")
+            curr_gov_v = df_vendors[df_vendors["id"] == selected_gov_id].iloc[0]
+
+            with st.form("form_vendor_status_transition"):
+                st.write(f"**Current Status:** `{curr_gov_v.get('status', 'ACTIVE')}` | **Tier:** `{curr_gov_v.get('commission_tier', 'TIER_STANDARD')}` | **Compliance:** `{curr_gov_v.get('compliance_status', 'VERIFIED')}`")
+                target_status = st.selectbox("Target Operational Status", ["ACTIVE", "SUSPENDED", "TERMINATED", "REJECTED"], key="sb_target_status")
+                target_tier = st.selectbox("Commission Tier", ["TIER_STARTER", "TIER_STANDARD", "TIER_PREFERRED", "TIER_ENTERPRISE"], index=["TIER_STARTER", "TIER_STANDARD", "TIER_PREFERRED", "TIER_ENTERPRISE"].index(curr_gov_v.get("commission_tier", "TIER_STANDARD")) if curr_gov_v.get("commission_tier") in ["TIER_STARTER", "TIER_STANDARD", "TIER_PREFERRED", "TIER_ENTERPRISE"] else 1)
+                gov_notes = st.text_input("Governance Audit Notes*", placeholder="Reason for status change or tier adjustment")
+                gov_submit = st.form_submit_button("Execute Status Transition")
+
+                if gov_submit:
+                    if not gov_notes:
+                        st.error("Audit notes are mandatory for status transitions.")
+                    else:
+                        payload = {
+                            "status": target_status,
+                            "commission_tier": target_tier,
+                            "verification_notes": gov_notes,
+                        }
+                        res, err = api_put(f"/vendors/{selected_gov_id}/status", payload)
+                        if res:
+                            st.success(f"Vendor #{selected_gov_id} successfully transitioned to {target_status} ({target_tier})!")
+                            st.rerun()
+                        else:
+                            st.error(f"Status transition rejected: {err}")
+
+    with tab_v_settle:
+        st.subheader("💰 Multi-Vendor Settlement Sheet & Payouts")
+        st.caption("Auditable financial ledger of gross sales, discount deductions, refund adjustments, and platform commissions.")
+        settle_data = api_get("/analytics/vendors/payouts") if is_live_api else None
+        if settle_data and settle_data.get("settlements"):
+            s_c1, s_c2, s_c3 = st.columns(3)
+            s_c1.metric("💵 Total Net Sales", f"₹{settle_data.get('total_net_sales', 0.0):,.2f}")
+            s_c2.metric("🏛️ Platform Commission", f"₹{settle_data.get('total_platform_commission', 0.0):,.2f}")
+            s_c3.metric("🤝 Total Payable Payouts", f"₹{settle_data.get('total_vendor_payouts', 0.0):,.2f}")
+
+            st.dataframe(pd.DataFrame(settle_data["settlements"]), use_container_width=True)
+        else:
+            st.info("No vendor settlement records available.")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -945,6 +1051,46 @@ elif selected_page == "💳 Transactions":
             df_filtered = df_tx
 
         st.dataframe(df_filtered, use_container_width=True)
+
+        st.markdown("---")
+        st.subheader("🛡️ Safe Refund Terminal (Idempotent & Stock-Aware)")
+        st.caption("Issue full or partial refunds with cryptographic idempotency keys, automatic payment status updates, and optional inventory restocking.")
+        if not is_live_api:
+            st.warning("⚠️ Safe Refund Terminal operates via Live API only.")
+        else:
+            with st.form("form_safe_refund", clear_on_submit=True):
+                r_c1, r_c2, r_c3 = st.columns(3)
+                ref_txn_id = r_c1.number_input("Transaction ID*", min_value=1, step=1)
+                ref_amount = r_c2.number_input("Refund Amount (₹)*", min_value=0.01, step=1.0, format="%.2f")
+                ref_restock = r_c3.checkbox("Restock Inventory to Warehouse", value=False)
+
+                r_c4, r_c5 = st.columns([1, 2])
+                ref_qty = r_c4.number_input("Units to Return", min_value=0, step=1, value=0)
+                ref_reason = r_c5.text_input("Refund Audit Reason*", placeholder="e.g. Customer return, damaged goods, sizing exchange")
+
+                ref_submit = st.form_submit_button("Process Safe Refund")
+                if ref_submit:
+                    if not ref_reason:
+                        st.error("Audit reason is required for processing refunds.")
+                    elif ref_restock and ref_qty <= 0:
+                        st.error("Returned quantity must be at least 1 unit when Restock Inventory is enabled.")
+                    else:
+                        import uuid
+                        idemp_key = f"terminal_{uuid.uuid4().hex[:12]}"
+                        payload = {
+                            "transaction_id": int(ref_txn_id),
+                            "amount": float(ref_amount),
+                            "idempotency_key": idemp_key,
+                            "reason": ref_reason,
+                            "restock_inventory": bool(ref_restock),
+                            "returned_quantity": int(ref_qty),
+                        }
+                        res, err = api_post("/refunds/", payload)
+                        if res:
+                            st.success(f"Refund successfully issued! Refund ID: {res.get('refund_id')}, Status: {res.get('status')}, Key: {idemp_key}")
+                            st.rerun()
+                        else:
+                            st.error(f"Refund processing failed: {err}")
     else:
         st.info("No transaction records available.")
 
