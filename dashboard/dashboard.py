@@ -589,6 +589,83 @@ if selected_page == "📊 Dashboard":
 
     st.markdown("---")
 
+    # ── Stage 5 Personalized Offer Strategy & Stock Impact Safety Guard ─────────
+    st.subheader("🛡️ AI Personalized Offer Strategy & Stock Impact Safety Guard (Stage 5)")
+    st.caption("Validates personalized cross-sell pathways and simulates promotional lift vs safety-stock boundaries before campaign approval.")
+
+    offer_tab_sim, offer_tab_strat = st.tabs(["⚡ Promotional Stock Impact Simulator", "🎯 Active Personalized Offer Proposals"])
+
+    with offer_tab_sim:
+        st.markdown("##### 🧪 Pre-Campaign Stock Impact Simulation")
+        st.caption("Formula: Ending Stock = Current Stock + Replenishment - Baseline Demand - Lift. Suppresses promotions if Ending Stock < Safety Stock.")
+        sim_col1, sim_col2 = st.columns([1, 2])
+
+        df_p_sim = get_products_list()
+
+        with sim_col1:
+            p_opts = {r["id"]: f"{r['name']} (ID: {r['id']})" for _, r in df_p_sim.iterrows()} if not df_p_sim.empty else {1: "Product 1"}
+            sim_pid = st.selectbox("Product to Promote", options=list(p_opts.keys()), format_func=lambda x: p_opts[x], key="sim_offer_pid")
+            sim_disc = st.slider("Proposed Discount %", min_value=1.0, max_value=40.0, value=15.0, step=1.0, key="sim_offer_disc")
+            sim_days = st.selectbox("Campaign Duration (Days)", options=[7, 14, 30, 60], index=1, key="sim_offer_days")
+            sim_po = st.number_input("Confirmed Incoming Replenishment (Units)", min_value=0, value=0, step=10, key="sim_offer_po")
+            st.button("Evaluate Stock Safety", key="btn_run_sim")
+
+        with sim_col2:
+            sim_result = api_get(f"/offers/stock-impact/{sim_pid}?discount_pct={sim_disc}&horizon_days={sim_days}&confirmed_replenishment={sim_po}") if is_live_api else None
+            if not sim_result:
+                try:
+                    from app.database import SessionLocal
+                    from app.services.offer_service import evaluate_stock_impact_safety
+                    db_sim = SessionLocal()
+                    try:
+                        sim_result = evaluate_stock_impact_safety(db_sim, product_id=sim_pid, discount_pct=sim_disc, horizon_days=sim_days, confirmed_replenishment=sim_po)
+                    finally:
+                        db_sim.close()
+                except Exception:
+                    pass
+
+            if sim_result:
+                res_col1, res_col2, res_col3, res_col4 = st.columns(4)
+                res_col1.metric("📦 Current Stock", sim_result.get("current_stock", 0))
+                res_col2.metric("📉 Projected Lift", f"+{sim_result.get('projected_promotional_lift', 0.0):.1f} units", delta=f"Elasticity: {sim_result.get('price_elasticity', 1.5):.2f}")
+                res_col3.metric("🛡️ Safety Stock", sim_result.get("safety_stock", 15))
+                res_col4.metric("📊 Ending Stock", f"{sim_result.get('projected_ending_stock', 0.0):.1f} units")
+
+                status_decision = sim_result.get("status", "APPROVED")
+                if status_decision == "APPROVED":
+                    st.success(f"✅ **STATUS: APPROVED** — {sim_result.get('decision_reason', '')}")
+                else:
+                    st.error(f"🛑 **STATUS: SUPPRESSED** — {sim_result.get('decision_reason', '')}")
+
+                st.caption(f"ℹ️ **Audit Trail:** {sim_result.get('audit_explanation', '')}")
+                st.caption(f"Elasticity Source: `{sim_result.get('elasticity_source', '')}` | Empirically Learned: `{sim_result.get('is_empirically_learned', False)}`")
+
+    with offer_tab_strat:
+        st.markdown("##### 📋 AI-Generated Segment Offer Strategy")
+        strat_data = api_get("/offers/strategy?limit=15") if is_live_api else None
+        if not strat_data:
+            try:
+                from app.database import SessionLocal
+                from app.services.offer_service import generate_personalized_offer_strategy
+                db_strat = SessionLocal()
+                try:
+                    strat_data = generate_personalized_offer_strategy(db_strat, limit=15)
+                finally:
+                    db_strat.close()
+            except Exception:
+                pass
+
+        if strat_data and strat_data.get("offers"):
+            st.markdown(f"**Total Generated Offers:** `{strat_data.get('total_personalized_offers', 0)}` | Segment Distribution: `{strat_data.get('segment_distribution', {})}`")
+            cols_show = ["offer_id", "customer_name", "target_segment", "product_name", "original_price", "discount_pct", "discounted_price", "strategic_objective", "recommendation_pathway"]
+            df_strat_show = pd.DataFrame(strat_data["offers"])
+            valid_cols = [c for c in cols_show if c in df_strat_show.columns]
+            st.dataframe(df_strat_show[valid_cols], use_container_width=True)
+        else:
+            st.info("No active personalized offer proposals.")
+
+    st.markdown("---")
+
     # Recent Transactions Feed
     st.subheader("⏱️ Recent Marketplace Activity")
     tx_recent = api_get("/analytics/transactions?limit=8") if is_live_api else None
@@ -762,7 +839,7 @@ elif selected_page == "📦 Product Management":
 
     st.markdown("---")
 
-    tab_p_list, tab_p_add, tab_p_edit = st.tabs(["📋 Catalog Table", "➕ Add Product", "✏️ Edit Product"])
+    tab_p_list, tab_p_add, tab_p_edit, tab_p_norm = st.tabs(["📋 Catalog Table", "➕ Add Product", "✏️ Edit Product", "🏷️ Catalog Normalizer & Audit (Stage 5)"])
 
     with tab_p_list:
         st.subheader("Active Catalog")
@@ -844,6 +921,53 @@ elif selected_page == "📦 Product Management":
                         st.rerun()
                     else:
                         st.error(f"Failed to update product: {err}")
+
+    with tab_p_norm:
+        st.subheader("🏷️ Catalog Normalizer & Attribute Audit (Stage 5)")
+        st.caption("Aggregates vendor catalogs into canonical 2-tier categories, extracts physical units, infers brands, flags price anomalies and duplicate listings.")
+        norm_data = api_get("/catalog/normalize") if is_live_api else None
+        if not norm_data:
+            try:
+                from app.database import SessionLocal
+                from app.services.catalog_normalizer import normalize_catalog
+                db_n = SessionLocal()
+                try:
+                    norm_data = normalize_catalog(db_n)
+                finally:
+                    db_n.close()
+            except Exception:
+                pass
+
+        if norm_data:
+            n1, n2, n3, n4, n5 = st.columns(5)
+            n1.metric("📦 Products Inspected", norm_data.get("total_products_inspected", 0))
+            n2.metric("🏷️ Categorized", norm_data.get("categories_normalized_count", 0))
+            n3.metric("📏 Units Extracted", norm_data.get("units_extracted_count", 0))
+            n4.metric("🔍 Near-Duplicates", norm_data.get("duplicate_candidates_found", 0))
+            n5.metric("⭐ Quality Score", f"{norm_data.get('average_attribute_quality_score', 0.0):.1f}/100")
+
+            st.caption(f"ℹ️ {norm_data.get('normalization_policy_note', '')}")
+
+            if norm_data.get("products"):
+                items_table = []
+                for item in norm_data["products"]:
+                    meas = item.get("measurement", {})
+                    meas_str = f"{meas.get('normalized_value', '')} {meas.get('normalized_unit', '')}" if meas.get("has_measurement") else "—"
+                    items_table.append({
+                        "ID": item["product_id"],
+                        "Product Name": item["normalized_name"],
+                        "Parent Category": item["parent_category"],
+                        "Canonical Subcategory": item["normalized_category"],
+                        "Inferred Brand": item["inferred_brand"],
+                        "Price (₹)": item["price"],
+                        "Cost (₹)": item["cost_price"] if item["cost_price"] is not None else "Legacy NULL",
+                        "Unit": meas_str,
+                        "Quality": f"{item['quality_score']:.0f}%",
+                        "Audit Flags": ", ".join(item.get("flags", [])) if item.get("flags") else "Clean",
+                    })
+                st.dataframe(pd.DataFrame(items_table), use_container_width=True)
+        else:
+            st.info("Catalog normalizer data unavailable.")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1167,89 +1291,280 @@ elif selected_page == "👥 Customer Analytics":
 
         st.markdown("---")
 
-        c_left, c_right = st.columns([1, 2])
+        tab_cust_rfm, tab_cust_churn, tab_cust_cohorts, tab_cust_clv, tab_cust_funnel = st.tabs([
+            "📊 RFM & Personas",
+            "⚠️ Predictive Churn (Stage 5)",
+            "📅 Cohort Retention (Stage 5)",
+            "💎 Predictive CLV (Stage 5)",
+            "🔄 Conversion Funnel (Stage 5)",
+        ])
 
-        with c_left:
-            st.subheader("🎯 Persona Breakdown")
-            sil = segments_data.get("silhouette_score", 0.0) if segments_data else 0.0
-            db_idx = segments_data.get("davies_bouldin_index", 0.553) if segments_data else 0.553
-            ch_score = segments_data.get("calinski_harabasz_score", 66.82) if segments_data else 66.82
+        with tab_cust_rfm:
+            c_left, c_right = st.columns([1, 2])
 
-            st.metric("📊 Cluster Silhouette Score", f"{sil:.3f}")
-            st.markdown(f"**Davies–Bouldin Index:** `{db_idx:.3f}` *(Lower is better; < 0.60 indicates strong separation)*")
-            st.markdown(f"**Calinski–Harabasz Score:** `{ch_score:.1f}`")
-            if sil >= 0.35:
-                st.success("Validated cluster cohesion & separation.")
-            else:
-                st.info("Moderate cluster separation.")
+            with c_left:
+                st.subheader("🎯 Persona Breakdown")
+                sil = segments_data.get("silhouette_score", 0.0) if segments_data else 0.0
+                db_idx = segments_data.get("davies_bouldin_index", 0.553) if segments_data else 0.553
+                ch_score = segments_data.get("calinski_harabasz_score", 66.82) if segments_data else 66.82
 
-            if segments_data and "profiles" in segments_data:
-                df_prof = pd.DataFrame(segments_data["profiles"])
-                p_col = "persona" if "persona" in df_prof.columns else ("segment_name" if "segment_name" in df_prof.columns else df_prof.columns[0])
-                c_col = "customer_count" if "customer_count" in df_prof.columns else ("count" if "count" in df_prof.columns else df_prof.columns[1])
-                fig_pie = px.pie(
-                    df_prof,
-                    names=p_col,
-                    values=c_col,
-                    hole=0.4,
-                    color_discrete_sequence=px.colors.qualitative.Pastel,
+                st.metric("📊 Cluster Silhouette Score", f"{sil:.3f}")
+                st.markdown(f"**Davies–Bouldin Index:** `{db_idx:.3f}` *(Lower is better; < 0.60 indicates strong separation)*")
+                st.markdown(f"**Calinski–Harabasz Score:** `{ch_score:.1f}`")
+                if sil >= 0.35:
+                    st.success("Validated cluster cohesion & separation.")
+                else:
+                    st.info("Moderate cluster separation.")
+
+                if segments_data and "profiles" in segments_data:
+                    df_prof = pd.DataFrame(segments_data["profiles"])
+                    p_col = "persona" if "persona" in df_prof.columns else ("segment_name" if "segment_name" in df_prof.columns else df_prof.columns[0])
+                    c_col = "customer_count" if "customer_count" in df_prof.columns else ("count" if "count" in df_prof.columns else df_prof.columns[1])
+                    fig_pie = px.pie(
+                        df_prof,
+                        names=p_col,
+                        values=c_col,
+                        hole=0.4,
+                        color_discrete_sequence=px.colors.qualitative.Pastel,
+                    )
+                    fig_pie.update_layout(margin=dict(l=20, r=20, t=20, b=20))
+                    st.plotly_chart(fig_pie, use_container_width=True)
+
+            with c_right:
+                st.subheader("🔍 Recency vs Monetary Clusters")
+                if segments_data and "customers" in segments_data:
+                    df_cust_seg = pd.DataFrame(segments_data["customers"])
+                    if "recency_days" in df_cust_seg.columns and "recency" not in df_cust_seg.columns:
+                        df_cust_seg["recency"] = df_cust_seg["recency_days"]
+                    if "segment_name" in df_cust_seg.columns and "persona" not in df_cust_seg.columns:
+                        df_cust_seg["persona"] = df_cust_seg["segment_name"]
+                    if "avg_order_value" in df_cust_seg.columns and "aov" not in df_cust_seg.columns:
+                        df_cust_seg["aov"] = df_cust_seg["avg_order_value"]
+
+                    fig_scat = px.scatter(
+                        df_cust_seg,
+                        x="recency",
+                        y="monetary",
+                        size="frequency",
+                        color="persona" if "persona" in df_cust_seg.columns else "cluster",
+                        hover_data=[c for c in ["name", "aov"] if c in df_cust_seg.columns],
+                        labels={"recency": "Recency (Days Since Last Order)", "monetary": "Lifetime Monetary Spend (₹)"},
+                    )
+                    fig_scat.update_layout(margin=dict(l=20, r=20, t=30, b=30))
+                    st.plotly_chart(fig_scat, use_container_width=True)
+
+            st.markdown("---")
+            st.subheader("📊 Customer Spend Distribution")
+            if rfm_data:
+                df_hist = pd.DataFrame(rfm_data)
+                m_col = "monetary" if "monetary" in df_hist.columns else ("lifetime_spend" if "lifetime_spend" in df_hist.columns else None)
+                if m_col:
+                    fig_hist = px.histogram(
+                        df_hist,
+                        x=m_col,
+                        nbins=15,
+                        title="Customer Lifetime Spend Distribution",
+                        labels={m_col: "Lifetime Spend (₹)", "count": "Customer Count"},
+                        color_discrete_sequence=["#38bdf8"],
+                    )
+                    fig_hist.update_layout(margin=dict(l=20, r=20, t=30, b=20))
+                    st.plotly_chart(fig_hist, use_container_width=True)
+
+            st.markdown("---")
+            st.subheader("📋 Customer RFM Metrics Table")
+            if rfm_data:
+                df_table = pd.DataFrame(rfm_data)
+                if "recency_days" in df_table.columns and "recency" not in df_table.columns:
+                    df_table["recency"] = df_table["recency_days"]
+                if "segment_name" in df_table.columns and "persona" not in df_table.columns:
+                    df_table["persona"] = df_table["segment_name"]
+                if "avg_order_value" in df_table.columns and "aov" not in df_table.columns:
+                    df_table["aov"] = df_table["avg_order_value"]
+
+                show_cols = [c for c in ["customer_id", "name", "email", "recency", "frequency", "monetary", "aov", "persona"] if c in df_table.columns]
+                st.dataframe(df_table[show_cols], use_container_width=True)
+
+        with tab_cust_churn:
+            st.subheader("⚠️ Supervised Customer Churn Prediction (Stage 5)")
+            st.caption("L2-regularized logistic classification on Jan–Sep 2024 features against Oct–Dec 2024 retention outcomes (zero target leakage).")
+            churn_res = api_get("/analytics/customers/churn") if is_live_api else None
+            if not churn_res:
+                try:
+                    from app.database import SessionLocal
+                    from app.services.churn_service import predict_customer_churn
+                    db_ch = SessionLocal()
+                    try:
+                        churn_res = predict_customer_churn(db_ch)
+                    finally:
+                        db_ch.close()
+                except Exception:
+                    pass
+
+            if churn_res and "metrics" in churn_res:
+                cm = churn_res["metrics"]
+                ch_c1, ch_c2, ch_c3, ch_c4 = st.columns(4)
+                ch_c1.metric("🔴 High Churn Risk", churn_res.get("high_risk_count", 0))
+                ch_c2.metric("🟡 Medium Churn Risk", churn_res.get("medium_risk_count", 0))
+                ch_c3.metric("🟢 Low Churn Risk", churn_res.get("low_risk_count", 0))
+                ch_c4.metric("📈 5-Fold CV ROC-AUC", f"{cm.get('roc_auc_mean', 0.0):.3f}")
+
+                st.markdown("---")
+                ch_m1, ch_m2, ch_m3, ch_m4 = st.columns(4)
+                ch_m1.metric("🎯 Precision (CV)", f"{cm.get('precision_mean', 0.0):.3f}")
+                ch_m2.metric("🔄 Recall (CV)", f"{cm.get('recall_mean', 0.0):.3f}")
+                ch_m3.metric("⚖️ F1-Score (CV)", f"{cm.get('f1_mean', 0.0):.3f}")
+                ch_m4.metric("📊 PR-AUC", f"{cm.get('pr_auc', 0.0):.3f}")
+
+                st.caption(f"ℹ️ **Evaluation Methodology:** {cm.get('validation_method', '')} | Observation: `{cm.get('observation_window', '')}` | Outcome: `{cm.get('outcome_window', '')}`")
+                st.caption(f"📝 {cm.get('limitations_note', '')}")
+
+                # Churn table
+                if churn_res.get("customers"):
+                    st.subheader("Customer Churn Risk & Explainability Drivers")
+                    ch_table = []
+                    for c in churn_res["customers"]:
+                        drivers_str = " | ".join(f"{f['feature_name']} ({f['impact_direction']})" for f in c.get("contributing_factors", [])[:2])
+                        ch_table.append({
+                            "ID": c["customer_id"],
+                            "Customer": c["name"],
+                            "Churn Probability": f"{c['churn_probability'] * 100:.1f}%",
+                            "Risk Category": c["risk_category"],
+                            "Predicted Churn": "Churn (1)" if c["predicted_churn"] == 1 else "Active (0)",
+                            "Recency": f"{c['recency_days']} days",
+                            "Obs Orders": c["frequency_obs"],
+                            "Obs Spend (₹)": f"₹{c['monetary_obs']:,.2f}",
+                            "Top Risk Drivers": drivers_str or "Baseline Profile",
+                        })
+                    st.dataframe(pd.DataFrame(ch_table), use_container_width=True)
+
+        with tab_cust_cohorts:
+            st.subheader("📅 Customer Signup Cohort Retention Heatmap (Stage 5)")
+            st.caption("Tracks monthly customer activity and percentage retention across all 12 calendar months of 2024 for customer cohorts.")
+            cohort_res = api_get("/analytics/customers/cohorts") if is_live_api else None
+            if not cohort_res:
+                try:
+                    from app.database import SessionLocal
+                    from app.services.cohort_service import compute_cohort_retention
+                    db_co = SessionLocal()
+                    try:
+                        cohort_res = compute_cohort_retention(db_co)
+                    finally:
+                        db_co.close()
+                except Exception:
+                    pass
+
+            if cohort_res and cohort_res.get("cohorts"):
+                c_data = cohort_res["cohorts"]
+                cohort_labels = [c["cohort_label"] for c in c_data]
+                period_cols = [f"2024-{str(m).zfill(2)}" for m in range(1, 13)]
+
+                matrix_rows = []
+                for c in c_data:
+                    ret_map = {p["activity_month_label"]: p["retention_pct"] for p in c.get("retention_periods", [])}
+                    row = [ret_map.get(m_lbl, 0.0) for m_lbl in period_cols]
+                    matrix_rows.append(row)
+
+                fig_cohort = px.imshow(
+                    matrix_rows,
+                    labels=dict(x="Activity Month (2024)", y="Signup Cohort", color="Retention %"),
+                    x=period_cols,
+                    y=cohort_labels,
+                    color_continuous_scale="Blues",
+                    aspect="auto",
+                    text_auto=".1f",
                 )
-                fig_pie.update_layout(margin=dict(l=20, r=20, t=20, b=20))
-                st.plotly_chart(fig_pie, use_container_width=True)
+                fig_cohort.update_layout(margin=dict(l=20, r=20, t=30, b=30))
+                st.plotly_chart(fig_cohort, use_container_width=True)
 
-        with c_right:
-            st.subheader("🔍 Recency vs Monetary Clusters")
-            if segments_data and "customers" in segments_data:
-                df_cust_seg = pd.DataFrame(segments_data["customers"])
-                if "recency_days" in df_cust_seg.columns and "recency" not in df_cust_seg.columns:
-                    df_cust_seg["recency"] = df_cust_seg["recency_days"]
-                if "segment_name" in df_cust_seg.columns and "persona" not in df_cust_seg.columns:
-                    df_cust_seg["persona"] = df_cust_seg["segment_name"]
-                if "avg_order_value" in df_cust_seg.columns and "aov" not in df_cust_seg.columns:
-                    df_cust_seg["aov"] = df_cust_seg["avg_order_value"]
+                st.caption(f"ℹ️ {cohort_res.get('methodology_note', '')}")
 
-                fig_scat = px.scatter(
-                    df_cust_seg,
-                    x="recency",
-                    y="monetary",
-                    size="frequency",
-                    color="persona" if "persona" in df_cust_seg.columns else "cluster",
-                    hover_data=[c for c in ["name", "aov"] if c in df_cust_seg.columns],
-                    labels={"recency": "Recency (Days Since Last Order)", "monetary": "Lifetime Monetary Spend (₹)"},
-                )
-                fig_scat.update_layout(margin=dict(l=20, r=20, t=30, b=30))
-                st.plotly_chart(fig_scat, use_container_width=True)
+        with tab_cust_clv:
+            st.subheader("💎 Predictive Customer Lifetime Value (CLV) (Stage 5)")
+            st.caption("Distinguishes historical customer spend from 12-month forward predictive value using Bayesian shrinkage AOV and recency decay.")
+            clv_res = api_get("/analytics/customers/clv") if is_live_api else None
+            if not clv_res:
+                try:
+                    from app.database import SessionLocal
+                    from app.services.clv_service import compute_predictive_clv
+                    db_clv = SessionLocal()
+                    try:
+                        clv_res = compute_predictive_clv(db_clv)
+                    finally:
+                        db_clv.close()
+                except Exception:
+                    pass
 
-        st.markdown("---")
-        st.subheader("📊 Customer Spend Distribution")
-        if rfm_data:
-            df_hist = pd.DataFrame(rfm_data)
-            m_col = "monetary" if "monetary" in df_hist.columns else ("lifetime_spend" if "lifetime_spend" in df_hist.columns else None)
-            if m_col:
-                fig_hist = px.histogram(
-                    df_hist,
-                    x=m_col,
-                    nbins=15,
-                    title="Customer Lifetime Spend Distribution",
-                    labels={m_col: "Lifetime Spend (₹)", "count": "Customer Count"},
-                    color_discrete_sequence=["#38bdf8"],
-                )
-                fig_hist.update_layout(margin=dict(l=20, r=20, t=30, b=20))
-                st.plotly_chart(fig_hist, use_container_width=True)
+            if clv_res and clv_res.get("customers"):
+                clv_c1, clv_c2, clv_c3, clv_c4 = st.columns(4)
+                clv_c1.metric("💰 Aggregate Historical Spend", f"₹{clv_res.get('aggregate_historical_revenue', 0.0):,.2f}")
+                clv_c2.metric("🔮 12M Forward Value", f"₹{clv_res.get('aggregate_predicted_12m_future_value', 0.0):,.2f}")
+                clv_c3.metric("📊 Mean Total CLV", f"₹{clv_res.get('mean_clv', 0.0):,.2f}")
+                clv_c4.metric("📈 Median Total CLV", f"₹{clv_res.get('median_clv', 0.0):,.2f}")
 
-        st.markdown("---")
-        st.subheader("📋 Customer RFM Metrics Table")
-        if rfm_data:
-            df_table = pd.DataFrame(rfm_data)
-            if "recency_days" in df_table.columns and "recency" not in df_table.columns:
-                df_table["recency"] = df_table["recency_days"]
-            if "segment_name" in df_table.columns and "persona" not in df_table.columns:
-                df_table["persona"] = df_table["segment_name"]
-            if "avg_order_value" in df_table.columns and "aov" not in df_table.columns:
-                df_table["aov"] = df_table["avg_order_value"]
+                st.markdown("---")
+                if clv_res.get("clv_tiers_distribution"):
+                    st.markdown("##### 🏆 Loyalty Tier Distribution")
+                    tier_df = pd.DataFrame(list(clv_res["clv_tiers_distribution"].items()), columns=["Tier", "Customer Count"])
+                    fig_tier = px.bar(tier_df, x="Tier", y="Customer Count", color="Tier", color_discrete_sequence=px.colors.qualitative.Bold)
+                    fig_tier.update_layout(margin=dict(l=20, r=20, t=20, b=20), showlegend=False)
+                    st.plotly_chart(fig_tier, use_container_width=True)
 
-            show_cols = [c for c in ["customer_id", "name", "email", "recency", "frequency", "monetary", "aov", "persona"] if c in df_table.columns]
-            st.dataframe(df_table[show_cols], use_container_width=True)
+                st.markdown("##### 📋 Customer CLV Predictions & Uncertainty Bounds")
+                clv_table = []
+                for c in clv_res["customers"]:
+                    clv_table.append({
+                        "ID": c["customer_id"],
+                        "Customer": c["name"],
+                        "Historical Spend": f"₹{c['historical_spend']:,.2f}",
+                        "Orders": c["order_count"],
+                        "Bayesian AOV": f"₹{c['avg_order_value']:,.2f}",
+                        "Active Prob": f"{c['active_probability'] * 100:.1f}%",
+                        "12M Projected Spend": f"₹{c['predicted_future_spend_12m']:,.2f}",
+                        "Total Predicted CLV": f"₹{c['total_predicted_clv']:,.2f}",
+                        "CLV Tier": c["clv_tier"],
+                        "90% Bounds": f"₹{c['clv_lower_bound']:,.0f} – ₹{c['clv_upper_bound']:,.0f}",
+                    })
+                st.dataframe(pd.DataFrame(clv_table), use_container_width=True)
+                st.caption(f"ℹ️ {clv_res.get('model_assumptions', '')}")
+
+        with tab_cust_funnel:
+            st.subheader("🔄 Empirical Conversion Funnel (Stage 5)")
+            st.caption("Calculates stage-by-stage drop-off and conversion rates across verified empirical interactions (View ➜ Cart ➜ Purchase).")
+            funnel_res = api_get("/analytics/customers/conversion-funnel") if is_live_api else None
+            if not funnel_res:
+                try:
+                    from app.database import SessionLocal
+                    from app.services.funnel_service import compute_conversion_funnel
+                    db_fn = SessionLocal()
+                    try:
+                        funnel_res = compute_conversion_funnel(db_fn)
+                    finally:
+                        db_fn.close()
+                except Exception:
+                    pass
+
+            if funnel_res and funnel_res.get("stages"):
+                fn_c1, fn_c2, fn_c3 = st.columns(3)
+                fn_c1.metric("👁️ Total Discovered Visitors", funnel_res.get("total_visitors_discovered", 0))
+                fn_c2.metric("💳 Purchasing Customers", funnel_res.get("total_purchasing_customers", 0))
+                fn_c3.metric("🎯 Overall Conversion Rate", f"{funnel_res.get('overall_funnel_conversion_pct', 0.0):.1f}%")
+
+                st.markdown("---")
+                stages = funnel_res["stages"]
+                stage_names = [s["stage_name"] for s in stages]
+                event_counts = [s["total_events"] for s in stages]
+
+                fig_funnel = go.Figure(go.Funnel(
+                    y=stage_names,
+                    x=event_counts,
+                    textinfo="value+percent initial",
+                    marker={"color": ["#38bdf8", "#818cf8", "#10b981"]},
+                ))
+                fig_funnel.update_layout(margin=dict(l=20, r=20, t=30, b=20))
+                st.plotly_chart(fig_funnel, use_container_width=True)
+
+                st.dataframe(pd.DataFrame(stages)[["stage_name", "event_type", "total_events", "unique_users", "conversion_from_previous_pct", "dropoff_from_previous_pct", "overall_conversion_pct"]], use_container_width=True)
+                st.info(f"🛡️ {funnel_res.get('data_authenticity_declaration', '')}")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1365,74 +1680,160 @@ elif selected_page == "🎯 Recommendations":
     st.title("🎯 Personalized Recommendation Engine")
     st.caption("Item-Based Collaborative Filtering (Cosine Similarity) with Popularity Cold-Start Fallback and Leave-20%-Out Holdout Evaluation.")
 
-    eval_data = api_get("/recommendations/evaluation") if is_live_api else None
-    if eval_data:
-        ev1, ev2, ev3, ev4 = st.columns(4)
-        hr3 = eval_data.get("hit_rate_at_3", 0.9375) * 100.0
-        rec3 = eval_data.get("recall_at_3", 0.8594) * 100.0
-        hr5 = eval_data.get("hit_rate_at_5", 1.0) * 100.0
-        prec3 = eval_data.get("precision_at_3", 0.3333) * 100.0
+    tab_rec_hybrid, tab_rec_cf = st.tabs([
+        "⚡ Hybrid Recommender (Stage 5)",
+        "🎯 Collaborative Filtering (Milestone 3)",
+    ])
 
-        ev1.metric("⚡ Hit Rate@3 (Relevance)", f"{hr3:.1f}%", delta="Target >= 75% MET")
-        ev2.metric("🔄 Recall@3", f"{rec3:.1f}%")
-        ev3.metric("⚡ Hit Rate@5", f"{hr5:.1f}%")
-        ev4.metric("🎯 Precision@3", f"{prec3:.1f}%")
-        st.caption("ℹ️ Relevance Target (>= 75%) is verified by Hit Rate@3 (93.8%) and Recall@3 (85.9%). Precision@K is mathematically capped by ground truth sparsity (|T_test| / K) since users have on average 1-2 items in the test holdout.")
-        st.markdown("---")
+    with tab_rec_hybrid:
+        st.subheader("⚡ Hybrid Recommendation Engine (Collaborative + Content-Based)")
+        st.caption("Combines Item-Based Collaborative Filtering and TF-IDF Content Similarity with strict verified live inventory stock guards.")
 
-    df_cust = csv_data["customers"]
-    if not df_cust.empty:
-        cust_map = {row["customer_id"]: f"{row['name']} (ID: {row['customer_id']})" for _, row in df_cust.iterrows()}
-        chosen_cid = st.selectbox("Select Customer to Generate Recommendations", options=list(cust_map.keys()), format_func=lambda x: cust_map[x])
+        df_cust = csv_data["customers"]
+        if not df_cust.empty:
+            cust_map = {row["customer_id"]: f"{row['name']} (ID: {row['customer_id']})" for _, row in df_cust.iterrows()}
+            h_c1, h_c2, h_c3 = st.columns([2, 2, 1])
+            with h_c1:
+                chosen_cid_h = st.selectbox("Select Customer Profile", options=list(cust_map.keys()), format_func=lambda x: cust_map[x], key="sb_hybrid_cid")
+            with h_c2:
+                alpha_val = st.slider("Collaborative Filtering Weight (α)", min_value=0.0, max_value=1.0, value=0.60, step=0.05, help="α=1.0 is pure CF; α=0.0 is pure Content-Based (TF-IDF)", key="sld_alpha")
+            with h_c3:
+                top_k = st.selectbox("Top N Items", options=[3, 4, 5, 8], index=1, key="sb_hybrid_topn")
 
-        rec_res = api_get(f"/recommendations/customer/{chosen_cid}?n=4") if is_live_api else None
+            hybrid_res = api_get(f"/recommendations/hybrid/{chosen_cid_h}?top_n={top_k}&alpha={alpha_val}") if is_live_api else None
+            if not hybrid_res:
+                try:
+                    from app.database import SessionLocal
+                    from app.services.hybrid_recommender import get_hybrid_recommendations
+                    db_h = SessionLocal()
+                    try:
+                        hybrid_res = get_hybrid_recommendations(db_h, customer_id=chosen_cid_h, top_n=top_k, alpha=alpha_val)
+                    finally:
+                        db_h.close()
+                except Exception:
+                    pass
 
-        # Fallback local popularity
-        if not rec_res:
-            df_tx = csv_data["transactions"]
-            df_prod = csv_data["products"]
-            df_vend = csv_data["vendors"]
-            if not df_tx.empty and not df_prod.empty:
-                sales_cnt = df_tx.groupby("product_id")["quantity"].sum().reset_index()
-                merged_top = sales_cnt.merge(df_prod, left_on="product_id", right_on="id")
-                if not df_vend.empty and "vendor_id" in merged_top.columns:
-                    merged_top = merged_top.merge(df_vend[["id", "name"]], left_on="vendor_id", right_on="id", suffixes=("", "_vendor"))
-                merged_top = merged_top.sort_values("quantity", ascending=False).head(4)
+            if hybrid_res and hybrid_res.get("recommendations"):
+                st.caption(f"ℹ️ {hybrid_res.get('explanation', '')}")
+                recs = hybrid_res["recommendations"]
+                rec_cols = st.columns(len(recs))
+                for idx, rec in enumerate(recs):
+                    with rec_cols[idx]:
+                        st.markdown(f"### {rec['product_name']}")
+                        st.markdown(f"**Category:** `{rec.get('category', 'General')}`")
+                        st.markdown(f"**Price:** ₹{rec['price']:,.2f}")
+                        st.markdown(f"**Vendor:** {rec['vendor_name']}")
+                        st.markdown(f"**Engine:** `{rec.get('recommendation_type', 'HYBRID')}`")
+                        st.markdown(f"**Hybrid Score:** ⭐ `{rec.get('score', 0.0):.3f}`")
+                        if rec.get("cf_score") is not None and rec.get("content_score") is not None:
+                            st.caption(f"CF: {rec['cf_score']:.2f} | Content: {rec['content_score']:.2f}")
+                        st.info(rec.get("rationale", "Recommended matching your affinity."))
 
-                rec_items = [
-                    {
-                        "product_name": row["name"],
-                        "category": row.get("category", "General"),
-                        "price": float(row["price"]),
-                        "vendor_name": row.get("name_vendor", "StockPilot Vendor"),
-                        "score": round(float(row["quantity"]), 1),
-                        "rationale": f"Catalog Best-Seller ({row['quantity']} units sold across platform).",
+            st.markdown("---")
+            st.subheader("📊 Chronological Holdout Offline Model Evaluation (Oct–Dec 2024)")
+            h_eval = api_get("/recommendations/hybrid/evaluation?k=5") if is_live_api else None
+            if not h_eval:
+                try:
+                    from app.database import SessionLocal
+                    from app.services.hybrid_recommender import evaluate_hybrid_engine
+                    db_he = SessionLocal()
+                    try:
+                        h_eval = evaluate_hybrid_engine(db_he, k=5)
+                    finally:
+                        db_he.close()
+                except Exception:
+                    pass
+
+            if h_eval:
+                he1, he2, he3, he4 = st.columns(4)
+                he1.metric("⚡ Hybrid Hit Rate@5", f"{h_eval.get('hit_rate_at_k', 0.0) * 100:.1f}%")
+                he2.metric("🎯 Mean Precision@5", f"{h_eval.get('mean_precision_at_k', 0.0):.3f}")
+                he3.metric("🔄 Mean Recall@5", f"{h_eval.get('mean_recall_at_k', 0.0):.3f}")
+                he4.metric("📈 NDCG@5", f"{h_eval.get('ndcg_at_k', 0.0):.3f}")
+
+                st.caption(f"ℹ️ **Evaluation Split:** {h_eval.get('split_method', '')} | {h_eval.get('message', '')}")
+
+                if h_eval.get("model_comparisons"):
+                    st.markdown("##### Model Performance Comparison")
+                    comp_rows = []
+                    for m_name, m_metrics in h_eval["model_comparisons"].items():
+                        comp_rows.append({
+                            "Model Architecture": m_name,
+                            "Hit Rate@5": f"{m_metrics.get('hit_rate', 0.0) * 100:.1f}%",
+                            "Precision@5": f"{m_metrics.get('precision', 0.0):.3f}" if "precision" in m_metrics else "—",
+                            "Recall@5": f"{m_metrics.get('recall', 0.0):.3f}" if "recall" in m_metrics else "—",
+                        })
+                    st.dataframe(pd.DataFrame(comp_rows), use_container_width=True)
+
+    with tab_rec_cf:
+        eval_data = api_get("/recommendations/evaluation") if is_live_api else None
+        if eval_data:
+            ev1, ev2, ev3, ev4 = st.columns(4)
+            hr3 = eval_data.get("hit_rate_at_3", 0.9375) * 100.0
+            rec3 = eval_data.get("recall_at_3", 0.8594) * 100.0
+            hr5 = eval_data.get("hit_rate_at_5", 1.0) * 100.0
+            prec3 = eval_data.get("precision_at_3", 0.3333) * 100.0
+
+            ev1.metric("⚡ Hit Rate@3 (Relevance)", f"{hr3:.1f}%", delta="Target >= 75% MET")
+            ev2.metric("🔄 Recall@3", f"{rec3:.1f}%")
+            ev3.metric("⚡ Hit Rate@5", f"{hr5:.1f}%")
+            ev4.metric("🎯 Precision@3", f"{prec3:.1f}%")
+            st.caption("ℹ️ Relevance Target (>= 75%) is verified by Hit Rate@3 (93.8%) and Recall@3 (85.9%). Precision@K is mathematically capped by ground truth sparsity (|T_test| / K) since users have on average 1-2 items in the test holdout.")
+            st.markdown("---")
+
+        df_cust = csv_data["customers"]
+        if not df_cust.empty:
+            cust_map = {row["customer_id"]: f"{row['name']} (ID: {row['customer_id']})" for _, row in df_cust.iterrows()}
+            chosen_cid = st.selectbox("Select Customer to Generate CF Recommendations", options=list(cust_map.keys()), format_func=lambda x: cust_map[x], key="sb_cf_cid")
+
+            rec_res = api_get(f"/recommendations/customer/{chosen_cid}?n=4") if is_live_api else None
+
+            # Fallback local popularity
+            if not rec_res:
+                df_tx = csv_data["transactions"]
+                df_prod = csv_data["products"]
+                df_vend = csv_data["vendors"]
+                if not df_tx.empty and not df_prod.empty:
+                    sales_cnt = df_tx.groupby("product_id")["quantity"].sum().reset_index()
+                    merged_top = sales_cnt.merge(df_prod, left_on="product_id", right_on="id")
+                    if not df_vend.empty and "vendor_id" in merged_top.columns:
+                        merged_top = merged_top.merge(df_vend[["id", "name"]], left_on="vendor_id", right_on="id", suffixes=("", "_vendor"))
+                    merged_top = merged_top.sort_values("quantity", ascending=False).head(4)
+
+                    rec_items = [
+                        {
+                            "product_name": row["name"],
+                            "category": row.get("category", "General"),
+                            "price": float(row["price"]),
+                            "vendor_name": row.get("name_vendor", "StockPilot Vendor"),
+                            "score": round(float(row["quantity"]), 1),
+                            "rationale": f"Catalog Best-Seller ({row['quantity']} units sold across platform).",
+                        }
+                        for _, row in merged_top.iterrows()
+                    ]
+                    rec_res = {
+                        "customer_id": chosen_cid,
+                        "customer_name": cust_map[chosen_cid],
+                        "is_personalized": False,
+                        "recommendation_count": len(rec_items),
+                        "recommendations": rec_items,
                     }
-                    for _, row in merged_top.iterrows()
-                ]
-                rec_res = {
-                    "customer_id": chosen_cid,
-                    "customer_name": cust_map[chosen_cid],
-                    "is_personalized": False,
-                    "recommendation_count": len(rec_items),
-                    "recommendations": rec_items,
-                }
 
-        if rec_res and rec_res.get("recommendations"):
-            rec_type = "✨ Personalized Collaborative Filtering" if rec_res.get("is_personalized") else "🌟 Catalog Best-Sellers (Popularity Fallback)"
-            st.caption(f"Recommendation Engine Mode: **{rec_type}**")
+            if rec_res and rec_res.get("recommendations"):
+                rec_type = "✨ Personalized Collaborative Filtering" if rec_res.get("is_personalized") else "🌟 Catalog Best-Sellers (Popularity Fallback)"
+                st.caption(f"Recommendation Engine Mode: **{rec_type}**")
 
-            rec_cols = st.columns(len(rec_res["recommendations"]))
-            for idx, rec in enumerate(rec_res["recommendations"]):
-                with rec_cols[idx]:
-                    st.markdown(f"### {rec['product_name']}")
-                    st.markdown(f"**Category:** `{rec.get('category', 'Catalog')}`")
-                    st.markdown(f"**Price:** ₹{rec['price']:,.2f}")
-                    st.markdown(f"**Vendor:** {rec['vendor_name']}")
-                    st.markdown(f"**Score:** ⭐ `{rec.get('score', 4.5)}`")
-                    st.info(rec.get("rationale", "Recommended based on collaborative similarity."))
-    else:
-        st.info("No customer data available.")
+                rec_cols = st.columns(len(rec_res["recommendations"]))
+                for idx, rec in enumerate(rec_res["recommendations"]):
+                    with rec_cols[idx]:
+                        st.markdown(f"### {rec['product_name']}")
+                        st.markdown(f"**Category:** `{rec.get('category', 'Catalog')}`")
+                        st.markdown(f"**Price:** ₹{rec['price']:,.2f}")
+                        st.markdown(f"**Vendor:** {rec['vendor_name']}")
+                        st.markdown(f"**Score:** ⭐ `{rec.get('score', 4.5)}`")
+                        st.info(rec.get("rationale", "Recommended based on collaborative similarity."))
+        else:
+            st.info("No customer data available.")
 
 
 # ═════════════════════════════════════════════════════════════════════════════

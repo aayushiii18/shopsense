@@ -1,19 +1,42 @@
 """
-routes/customer_routes.py — FastAPI endpoints for Customer Analytics & Segmentation.
+routes/customer_routes.py — FastAPI endpoints for Customer Analytics, Segmentation & Retention Intelligence.
 
 Endpoints:
-  GET  /analytics/customers/summary     Marketplace customer KPIs and lifetime value
-  GET  /analytics/customers/rfm         RFM behavioral features per customer
-  GET  /analytics/customers/segments    K-Means customer clusters with silhouette validation
+  GET  /analytics/customers/summary             Marketplace customer KPIs and lifetime value
+  GET  /analytics/customers/rfm                 RFM behavioral features per customer
+  GET  /analytics/customers/segments            K-Means customer clusters with silhouette validation
+  GET  /analytics/customers/churn               Customer churn prediction & ML evaluation metrics
+  GET  /analytics/customers/churn/{customer_id} Single customer churn risk score & drivers
+  GET  /analytics/customers/cohorts             Signup cohort retention matrix across calendar months
+  GET  /analytics/customers/clv                 12-month forward predictive CLV summary & tiers
+  GET  /analytics/customers/clv/{customer_id}   Single customer predictive CLV projection
+  GET  /analytics/customers/conversion-funnel   Empirical 3-stage conversion funnel
 """
 
 from typing import Optional
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.services import customer_service, revenue_service
+from app.services import (
+    customer_service,
+    revenue_service,
+    churn_service,
+    cohort_service,
+    clv_service,
+    funnel_service,
+)
 from app.schemas.revenue_schema import CustomerMetricsResponse
+from app.schemas.customer_schema import (
+    ChurnSummaryResponse,
+    CustomerChurnResponse,
+    SingleCustomerChurnResponse,
+    CohortRetentionResponse,
+    CLVSummaryResponse,
+    CustomerCLVResponse,
+    SingleCustomerCLVResponse,
+    ConversionFunnelResponse,
+)
 
 router = APIRouter(prefix="/analytics/customers", tags=["Customer Analytics"])
 
@@ -47,3 +70,60 @@ def customer_segments(
     Evaluates cluster cohesion and separation using the Silhouette Score.
     """
     return customer_service.segment_customers(db, n_clusters=n_clusters)
+
+
+# ── Stage 5 Endpoints: Churn, Cohorts, CLV, Conversion Funnel ─────────────────
+
+
+@router.get("/churn", response_model=ChurnSummaryResponse, summary="Customer Churn Prediction & Model Metrics")
+def customer_churn(db: Session = Depends(get_db)):
+    """
+    Predicts customer churn probability and risk tier using an L2 regularized logistic model
+    trained on Jan–Sep 2024 features against Oct–Dec 2024 retention outcomes.
+    Evaluated with 5-fold stratified cross-validation and feature explainability.
+    """
+    return churn_service.predict_customer_churn(db)
+
+
+@router.get("/churn/{customer_id}", response_model=SingleCustomerChurnResponse, summary="Single Customer Churn Risk")
+def single_customer_churn(customer_id: int, db: Session = Depends(get_db)):
+    """Returns individual churn prediction and top risk drivers for a specific customer."""
+    res = churn_service.get_single_customer_churn(db, customer_id=customer_id)
+    if not res:
+        raise HTTPException(status_code=404, detail=f"Customer {customer_id} not found")
+    return res
+
+
+@router.get("/cohorts", response_model=CohortRetentionResponse, summary="Customer Signup Cohort Retention Matrix")
+def customer_cohorts(db: Session = Depends(get_db)):
+    """
+    Computes monthly cohort retention percentages across calendar months for customer signup cohorts.
+    """
+    return cohort_service.compute_cohort_retention(db)
+
+
+@router.get("/clv", response_model=CLVSummaryResponse, summary="Predictive Customer Lifetime Value (CLV)")
+def customer_clv(db: Session = Depends(get_db)):
+    """
+    Computes 12-month forward predictive CLV combining Bayesian shrinkage AOV,
+    inactivity decay, and gross margin, strictly separating historical spend from forward projections.
+    """
+    return clv_service.compute_predictive_clv(db)
+
+
+@router.get("/clv/{customer_id}", response_model=SingleCustomerCLVResponse, summary="Single Customer Predictive CLV")
+def single_customer_clv(customer_id: int, db: Session = Depends(get_db)):
+    """Returns individual 12-month forward predictive CLV, historical spend, and tier."""
+    res = clv_service.get_single_customer_clv(db, customer_id=customer_id)
+    if not res:
+        raise HTTPException(status_code=404, detail=f"Customer {customer_id} not found")
+    return res
+
+
+@router.get("/conversion-funnel", response_model=ConversionFunnelResponse, summary="Empirical Conversion Funnel")
+def customer_conversion_funnel(db: Session = Depends(get_db)):
+    """
+    Computes empirical conversion funnel (View -> Add to Cart -> Purchase)
+    from recorded customer behavioral interaction events.
+    """
+    return funnel_service.compute_conversion_funnel(db)
