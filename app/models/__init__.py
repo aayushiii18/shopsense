@@ -9,6 +9,7 @@ from app.models.customer_interaction import CustomerInteraction
 from app.models.workflow_audit import WorkflowAuditLog
 from app.models.refund import Refund
 from app.models.vendor_settlement import VendorSettlement
+from app.models.etl import ETLBatch, ETLStagingRecord, ETLQuarantineRecord, DailySalesMart
 
 __all__ = [
     "Vendor",
@@ -21,4 +22,8 @@ __all__ = [
     "WorkflowAuditLog",
     "Refund",
     "VendorSettlement",
+    "ETLBatch",
+    "ETLStagingRecord",
+    "ETLQuarantineRecord",
+    "DailySalesMart",
 ]

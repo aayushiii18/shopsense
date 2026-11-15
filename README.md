@@ -1,197 +1,313 @@
-# StockPilot — Retail Management Platform for Inventory Control and Sales Analytics
-> **Smarter Stock. Better Decisions.**
-*Infosys Springboard Internship Project — Milestones 1 & 2*
+# ShopSense / StockPilot — Multi-Vendor Retail Management, Analytics & Data Warehouse Platform
+> **Smarter Stock. Better Decisions.**  
+> *Infosys Springboard Internship Project — Stages 1 through 6 Complete*
 
 ---
 
-## 1. Project Overview
-**StockPilot** is an intelligent retail management platform featuring inventory analytics, demand forecasting, customer segmentation, and personalized product recommendations. Built with an enterprise-grade backend using **FastAPI**, **PostgreSQL**, **SQLAlchemy**, and **Streamlit**, StockPilot empowers multi-vendor retail platforms to manage catalog operations, audit real-time inventory movements, forecast seasonal demand, segment customer behavior via unsupervised machine learning, and deliver personalized product recommendations.
+## 1. Executive Overview
+
+**ShopSense (StockPilot)** is an enterprise multi-vendor retail management, analytics, machine learning, and data warehousing platform. Designed with a modular service-oriented architecture using **FastAPI**, **PostgreSQL**, **SQLAlchemy 2.0**, and **Streamlit**, ShopSense provides:
+
+- **End-to-End Retail Operations:** Vendor onboarding, category hierarchies, product catalogs, physical inventory tracking, and transaction ledgers.
+- **Advanced Commerce & Financial Operations (Stage 4):** Commission tiers with transaction-time rate snapshotting, nullable Cost of Goods Sold (COGS) reporting with explicit coverage disclosure, atomic refunds with idempotency, and vendor settlement ledgers.
+- **Customer Retention & Intelligence Engine (Stage 5):** Temporal churn prediction, cohort retention matrices, customer lifetime value (CLV), item-based collaborative filtering, catalog taxonomy normalization, and promotion safety stock validation.
+- **Structured ETL, Bulk Ingestion & Data Warehouse (Stage 6):** Chunked CSV data ingestion, staging buffer, row-level validation, database-enforced deduplication, quarantine triage and reprocessing, automated reconciliation, and dimensional data marts with scheduled refresh.
 
 ---
 
-## 2. Core Modules & Implemented Features
+## 2. Core Architecture & Modules
 
-### Module 1: Product & Inventory Analytics Engine
-- **Centralized Inventory & Catalog Hierarchy:** Centralized product records, pricing, parent category hierarchy, and multi-warehouse movement tracking.
-- **Stock Movement Auditing:** Real-time logging of stock events (`RESTOCK`, `SALE`, `ADJUSTMENT`, `TRANSFER`, `RETURN`) with automated inventory balance synchronization.
-- **Inventory Turnover & DSI:** Product and catalog-level turnover calculations ($\text{Sales} / \text{Average Stock}$) and Days Sales of Inventory (DSI), with velocity classification (`FAST_MOVING`, `NORMAL`, `SLOW_MOVING`, `DEAD_STOCK`).
-- **Time-Series Demand Forecasting:** Forecasting daily product demand using seasonal day-of-week indicators and linear trend components.
-  - **Evaluation Rigor:** Evaluated on a chronological 80/20 test holdout with zero lookahead leakage, reporting **MAE**, **RMSE**, and **WAPE** ($R^2 \times 100$ is rejected due to time-series vulnerability).
-  - 95% confidence interval bands for forward projections.
-- **Low-Stock Alerts & Depletion Projections:** Automated detection of products where $\text{Current Stock} \le \text{Reorder Level}$, calculating daily velocity and days until stockout.
-- **Dynamic Replenishment Recommendations:** Calculates Safety Stock ($Z \times \sigma \times \sqrt{L}$), Reorder Points (ROP), and Recommended Order Quantities.
-
-### Module 2: Customer Behavioral Analytics & Segmentation
-- **RFM Feature Engineering:** Computes Recency ($R$, days since last purchase), Frequency ($F$, total orders), Monetary ($M$, lifetime spend), and Average Order Value ($AOV$) per customer.
-- **K-Means Customer Segmentation:** Standardizes RFM features with `StandardScaler` and clusters customers into distinct business personas:
-  - *Champions / VIP* (High monetary, high frequency, recent engagement)
-  - *Loyal Regulars* (Steady frequency and moderate-to-high spend)
-  - *At-Risk / Lapsed* (Dormant customers with high historical spend)
-  - *New / Occasional* (Recent onboarding or low purchase frequency)
-- **Silhouette Score Evaluation:** Evaluates cluster cohesion and separation using `sklearn.metrics.silhouette_score`.
-
-### Module 3: Personalized Recommendation Engine
-- **Item-Based Collaborative Filtering:** Computes cosine similarity between product vectors derived from customer interactions (views, cart additions, ratings, and purchases).
-- **Top-N Personalized Recommendations:** Recommends top unpurchased products with score ranking and clear business rationales (e.g., *"Frequently explored alongside Wireless Headphones"*).
-- **Cold-Start Popularity Fallback:** Serves top-selling catalog items when a customer has no prior interaction history.
-- **Offline Evaluation (Leave-20%-Out Split):** Evaluates recommendation relevance against chronological held-out interactions, reporting **Precision@K**, **Recall@K**, and **Hit Rate@K**.
-
-### Milestone 1 Baseline (Preserved)
-- Multi-vendor registration with input validation (RFC emails, regex phone formats).
-- Product registration with foreign-key constraints and price positivity checks.
-- Baseline sales aggregation (total revenue, vendor revenue, product performance, summary report).
-- Dual-mode Streamlit dashboard with live API and local demo CSV support.
-
----
-
-## 3. Technology Stack
-
-- **Language:** Python 3.10+
-- **Web Framework:** FastAPI 0.111+ / Uvicorn (ASGI)
-- **Database & ORM:** PostgreSQL 16/18 / SQLAlchemy 2.0 / `psycopg2-binary`
-- **Data Validation & Settings:** Pydantic 2.x (with Email-Validator) / `python-dotenv`
-- **Machine Learning & Analytics:** Scikit-Learn 1.7+, Pandas 2.2+, NumPy
-- **Interactive Dashboard:** Streamlit / Plotly
-- **Testing & QA:** Pytest 8.2+ / HTTPX / Pytest-Asyncio
-
----
-
-## 4. Directory Structure
-
-```text
-Retail Management Platform for Inventory Control and Sales Analytics/
-├── app/
-│   ├── models/
-│   │   ├── __init__.py                # Exports all models
-│   │   ├── vendor.py                  # Vendor ORM model
-│   │   ├── product.py                 # Product ORM model (category hierarchy, FK -> vendors)
-│   │   ├── inventory.py               # Inventory model (1:1 with product, reorder_level)
-│   │   ├── transaction.py             # Transaction model (amount, customer_id FK)
-│   │   ├── customer.py                # Customer ORM model (RFM entity)
-│   │   ├── stock_movement.py          # StockMovement audit log
-│   │   └── customer_interaction.py    # Customer interaction records
-│   ├── schemas/
-│   │   ├── vendor_schema.py           # Vendor Pydantic schemas
-│   │   ├── product_schema.py          # Product Pydantic schemas
-│   │   ├── inventory_schema.py        # Stock movement schemas
-│   │   ├── customer_schema.py         # Customer & RFM schemas
-│   │   └── recommendation_schema.py   # Recommendation schemas
-│   ├── routes/
-│   │   ├── vendor_routes.py            # /vendors endpoints
-│   │   ├── product_routes.py           # /products endpoints
-│   │   ├── analytics_routes.py         # /analytics sales endpoints
-│   │   ├── inventory_routes.py         # /analytics/inventory & /inventory endpoints
-│   │   ├── customer_routes.py          # /analytics/customers endpoints
-│   │   └── recommendation_routes.py    # /recommendations endpoints
-│   ├── services/
-│   │   ├── inventory_service.py       # Turnover, forecasting, replenishment logic
-│   │   ├── customer_service.py        # RFM extraction, K-Means, silhouette score
-│   │   └── recommendation_service.py  # Collaborative filtering, Precision@K
-│   ├── database.py                    # SQLAlchemy engine & session factory
-│   └── main.py                        # FastAPI application entry point
-├── dashboard/
-│   └── dashboard.py                   # 4-Tab Streamlit interactive analytics dashboard
-├── data/
-│   ├── vendors.csv                    # 5 vendors dataset
-│   ├── products.csv                   # 10 products with category hierarchy
-│   ├── inventory.csv                  # 10 inventory records
-│   ├── customers.csv                  # 60 customers with geographic distribution
-│   ├── transactions.csv               # 600 transactions over 12 months with seasonality
-│   ├── stock_movements.csv            # 440 stock movement records
-│   └── customer_interactions.csv      # 1,342 customer interactions
-├── tests/
-│   ├── conftest.py                    # Pytest fixtures and isolated SQLite DB setup
-│   ├── test_vendors.py                # Vendor registration tests (25 tests)
-│   ├── test_products.py               # Product catalog tests (14 tests)
-│   ├── test_inventory.py              # Inventory model defaults & constraints (7 tests)
-│   ├── test_analytics.py              # Baseline revenue analytics tests (10 tests)
-│   ├── test_inventory_analytics.py    # Module 1: Inventory & forecasting tests (12 tests)
-│   ├── test_customer_analytics.py     # Module 2: RFM & K-Means tests (6 tests)
-│   └── test_recommendations.py        # Module 3: Collaborative filtering tests (6 tests)
-├── create_tables.py                   # Creates all database tables
-├── migrate_milestone2.py              # Idempotent DDL schema migration
-├── generate_datasets.py               # Generates synthetic datasets
-├── seed_data.py                       # Idempotent database seeder
-├── requirements.txt                   # Complete dependencies manifest
-├── .env.example                       # Environment template
-└── README.md                          # Platform documentation
+```
+                                    ┌────────────────────────────────────────────────────────┐
+                                    │               Streamlit Interactive UI                 │
+                                    │    (10 Modular Analytics & Operational Views)          │
+                                    └───────────────────────────┬────────────────────────────┘
+                                                                │
+                                                                ▼
+┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                           FastAPI REST API Services                                                │
+│  /vendors  •  /products  •  /inventory  •  /analytics  •  /recommendations  •  /refunds  •  /offers  •  /etl       │
+└───────────────────────────────────────────────────┬────────────────────────────────────────────────────────────────┘
+                                                    │
+                   ┌────────────────────────────────┴────────────────────────────────┐
+                   │                                                                 │
+                   ▼                                                                 ▼
+┌──────────────────────────────────────┐                         ┌──────────────────────────────────────────────┐
+│           Operational Core           │                         │             ETL & Data Warehouse             │
+│  • Transaction Ledger & Payouts      │                         │  • Chunked CSV Extractor & Header Normalizer │
+│  • Multi-Tier Commission Snapshot    │                         │  • Staging Buffer (etl_staging_records)      │
+│  • Nullable COGS Accounting          │                         │  • Validation Engine (4 Error Categories)    │
+│  • Idempotent Refund Operations      │                         │  • (source_system, source_tx_id) Deduplication│
+│  • Physical Stock & Movement Logs    │                         │  • Quarantine Triage & Reprocessing          │
+│  • APScheduler Analytical Pipeline   │                         │  • Reconciliation Audit (Count & Monetary)   │
+│  • MLflow Model Tracking & Registry  │                         │  • DailySalesMart (Date x Product x Vendor)  │
+└──────────────────┬───────────────────┘                         └──────────────────────┬───────────────────────┘
+                   │                                                                    │
+                   └────────────────────────────────┬───────────────────────────────────┘
+                                                    │
+                                                    ▼
+                                    ┌───────────────────────────────┐
+                                    │    PostgreSQL 16 Database     │
+                                    │     (14 Relational Tables)    │
+                                    └───────────────────────────────┘
 ```
 
 ---
 
-## 5. Quickstart & Installation
+## 3. Stage 6: Structured ETL & Data Warehouse Specification
 
-### Step 1: Clone & Set Up Environment
+### A. Modular ETL Architecture (`app/services/etl/`)
+The ingestion pipeline strictly enforces clean stage separation:
+**Extract → Stage → Validate → Deduplicate → Quarantine / Load → Reconcile → Audit**
+
+1. **Extract (`extract.py`):**
+   - Streaming generator with chunked processing (`chunk_size=1000`) for bounded memory usage.
+   - Robust character encoding detection (`utf-8`, `utf-8-sig`, `latin-1`, `cp1252`) and delimiter sniffing (`,`, `;`, `\t`, `|`).
+   - Header aliasing supporting varying CSV source naming conventions.
+   - SHA-256 batch file checksumming.
+
+2. **Validation (`validation.py`):**
+   - Row-level schema validation with pre-cached catalog lookups to eliminate $N+1$ query overhead.
+   - Strict range constraints: `quantity > 0`, `unit_price > 0`, `discount_amount >= 0`, `amount > 0`.
+   - Referential integrity checks against `products`, `vendors`, and `customers`.
+   - Structured error classification: `VALIDATION_ERROR`, `INVALID_DATA_TYPE`, `MISSING_FOREIGN_KEY`, `MALFORMED_ROW`.
+
+3. **Deduplication & Idempotency (`deduplication.py`):**
+   - Database-enforced composite idempotency key on `(source_system, source_transaction_id)`.
+   - Catches in-batch duplicates (repeated rows in same upload) and cross-batch duplicates (re-uploaded transactions).
+   - Invariant guarantee: Legacy historical records retain `NULL` source keys and remain 100% valid.
+
+4. **Staging & Quarantine Management (`quarantine.py`):**
+   - Isolates invalid rows into `etl_quarantine_records` while buffering all raw inputs in `etl_staging_records`.
+   - Preserves original JSON payloads for full auditability.
+   - Interactive triage: manual corrections can be submitted to re-validate and commit quarantined records.
+
+5. **Loading & Transformation (`loading.py`, `transformation.py`):**
+   - Transformed records snapshot the vendor's active commission rate at ingestion time.
+   - Optional inventory synchronization decrements stock and logs `SALE` movements atomically.
+   - Links staging records to generated `transaction_id`.
+
+6. **Reconciliation & Data Quality (`reconciliation.py`):**
+   - Computes source vs. staged vs. committed vs. quarantined vs. duplicate counts.
+   - Monetary reconciliation: verifies batch gross sum equals actual database transaction amounts ($\Delta = 0.00$).
+   - Platform-wide data quality benchmark reporting catalog health and referential integrity.
+
+7. **Dimensional Data Warehouse (`daily_mart_service.py`):**
+   - Aggregates operational sales into `daily_sales_mart` at `(date, product_id, vendor_id)` grain.
+   - Preserves Stage 4 Nullable COGS rules: uncosted legacy items report `NULL` cost and profit with explicit coverage disclosures.
+   - Idempotent upsert logic prevents aggregate duplication or GMV inflation on repeated refreshes.
+
+8. **Scheduled Automation (`app/scheduler.py`):**
+   - Nightly 01:30 AM background refresh job via APScheduler.
+   - Process-level overlap protection (`max_instances=1` and in-process execution lock).
+
+---
+
+## 4. Database Schema Additions (Stage 6)
+
+| Table Name | Primary Key | Key Foreign Keys & Constraints | Description |
+| :--- | :--- | :--- | :--- |
+| `etl_batches` | `batch_id` (VARCHAR 50) | Status: `RECEIVED`, `PROCESSING`, `COMPLETED`, `PARTIALLY_COMPLETED`, `FAILED` | Ingestion batch lifecycle and audit summary. |
+| `etl_staging_records` | `staging_id` (SERIAL) | `FK -> etl_batches(batch_id)`, `FK -> transactions(transaction_id)` | Staging buffer preserving raw CSV payloads. |
+| `etl_quarantine_records` | `quarantine_id` (SERIAL) | `FK -> etl_batches(batch_id)`, `FK -> etl_staging_records(staging_id)` | Quarantined invalid rows with resolution status. |
+| `daily_sales_mart` | `id` (SERIAL) | `UNIQUE(date, product_id, vendor_id)`, `FK -> products`, `FK -> vendors` | Dimensional data warehouse sales aggregates. |
+| `transactions` *(extended)* | `transaction_id` (SERIAL) | `UNIQUE(source_system, source_transaction_id)` | Added external source tracking and idempotency. |
+
+---
+
+## 5. Technology Stack
+
+- **Language:** Python 3.10+
+- **Backend API:** FastAPI 0.111+ / Uvicorn (ASGI) / Pydantic 2.x
+- **Database & Warehouse:** PostgreSQL 16 / SQLAlchemy 2.0 / `psycopg2-binary`
+- **Data Analytics & ML:** Scikit-Learn 1.7+, Pandas 2.2+, NumPy
+- **Experiment Tracking:** MLflow 2.x
+- **Background Scheduling:** APScheduler 3.10+ (Cross-process file lock & overlap protection)
+- **Interactive UI:** Streamlit / Plotly
+- **Automated Testing:** Pytest 8.2+ / FastAPI TestClient / Streamlit AppTest / Locust
+
+---
+
+## 6. Directory Structure
+
+```text
+Retail Management Platform for Inventory Control and Sales Analytics/
+├── app/
+│   ├── core/
+│   │   └── security.py                # Loopback protection for administrative endpoints
+│   ├── models/
+│   │   ├── vendor.py                  # Vendor ORM (commission tiers & compliance)
+│   │   ├── product.py                 # Product catalog (nullable cost_price)
+│   │   ├── inventory.py               # Inventory model (current_stock, reorder_level)
+│   │   ├── transaction.py             # Transaction ledger (source idempotency keys)
+│   │   ├── customer.py                # Customer ORM model
+│   │   ├── stock_movement.py          # StockMovement audit logs
+│   │   ├── customer_interaction.py    # Customer interaction events
+│   │   ├── workflow_audit.py          # Pipeline execution audit logs
+│   │   ├── refund.py                  # Atomic refund ledger
+│   │   ├── vendor_settlement.py       # Vendor settlement ledger
+│   │   └── etl.py                     # ETLBatch, Staging, Quarantine, DailySalesMart
+│   ├── routes/
+│   │   ├── vendor_routes.py           # Vendor operations & status updates
+│   │   ├── product_routes.py          # Product catalog operations
+│   │   ├── analytics_routes.py        # Baseline revenue analytics
+│   │   ├── inventory_routes.py        # Inventory tracking & movements
+│   │   ├── customer_routes.py         # Customer RFM, churn, and retention
+│   │   ├── recommendation_routes.py   # Hybrid recommendations
+│   │   ├── revenue_routes.py          # Advanced revenue benchmarks
+│   │   ├── forecast_routes.py         # Demand forecasting endpoints
+│   │   ├── report_routes.py           # PDF and Excel report exports
+│   │   ├── refund_routes.py           # Atomic refund endpoints
+│   │   ├── offer_routes.py            # Offer strategy & safety stock engine
+│   │   ├── catalog_routes.py          # Catalog normalizer endpoints
+│   │   └── etl_routes.py              # 12 ETL & Data Warehouse REST endpoints
+│   ├── services/
+│   │   ├── etl/                       # Modular ETL & Data Warehouse Engine
+│   │   │   ├── extract.py             # Chunked CSV extractor & encoding detector
+│   │   │   ├── validation.py          # Row-level validator & range verifier
+│   │   │   ├── deduplication.py       # In-batch & cross-batch deduplicator
+│   │   │   ├── transformation.py      # Data normalizer & commission snapshotter
+│   │   │   ├── loading.py             # Atomic transactional loader & inventory sync
+│   │   │   ├── quarantine.py          # Quarantine triage & reprocessing workflow
+│   │   │   ├── reconciliation.py      # Count & monetary reconciliation auditor
+│   │   │   ├── batch_manager.py       # End-to-end pipeline orchestrator
+│   │   │   └── daily_mart_service.py  # Dimensional daily mart aggregator
+│   │   ├── customer_service.py        # RFM metrics & K-Means segmentation
+│   │   ├── inventory_service.py       # Turnover, safety stock, DSI calculations
+│   │   ├── recommendation_service.py  # Collaborative filtering engine
+│   │   ├── hybrid_recommender.py      # Hybrid recommendation engine
+│   │   ├── refund_service.py          # Atomic refund processor
+│   │   ├── settlement_service.py      # Vendor payout ledger service
+│   │   ├── catalog_normalizer.py      # Catalog taxonomy normalizer
+│   │   └── offer_intelligence.py      # Offer elasticity & safety stock engine
+│   ├── database.py                    # SQLAlchemy database engine
+│   ├── scheduler.py                   # APScheduler background automation
+│   └── main.py                        # FastAPI application entry point
+├── dashboard/
+│   └── dashboard.py                   # 10-View Streamlit Platform (including ETL view)
+├── tests/
+│   ├── conftest.py                    # Isolated SQLite database fixtures
+│   ├── test_stage6_etl.py             # Dedicated Stage 6 test suite (20 scenarios)
+│   ├── test_stage5_intelligence.py    # Stage 5 Customer Retention & ML tests
+│   ├── test_stage4_commerce.py        # Stage 4 Commerce & Financial tests
+│   ├── test_vendors.py                # Vendor validation tests
+│   ├── test_products.py               # Product catalog tests
+│   ├── test_inventory.py              # Inventory constraints tests
+│   ├── test_analytics.py              # Baseline revenue tests
+│   ├── test_inventory_analytics.py    # Inventory & forecasting tests
+│   ├── test_customer_analytics.py     # RFM & segmentation tests
+│   ├── test_recommendations.py        # Recommendation tests
+│   ├── test_revenue_analytics.py      # Revenue benchmark tests
+│   ├── test_reporting_and_validation.py # PDF/Excel and Locust tests
+│   └── test_scheduler_pipeline.py     # Scheduler and pipeline audit tests
+├── migrate_stage6.py                  # Idempotent Stage 6 PostgreSQL DDL migration
+├── validate_consistency.py            # Platform-wide data consistency validation
+└── README.md
+```
+
+---
+
+## 7. Quickstart & Installation
+
+### Step 1: Environment Setup
 ```powershell
 python -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
 
-### Step 2: Environment Configuration
-Copy `.env.example` to `.env` and configure your PostgreSQL database connection:
+### Step 2: Configure Environment
+Copy `.env.example` to `.env` and verify database settings:
 ```env
 DATABASE_URL=postgresql://postgres:<password>@localhost:5432/shopsense
 TEST_DATABASE_URL=sqlite:///./test_shopsense.db
+ENABLE_AUTO_SCHEDULER=true
 ```
 
-### Step 3: Run Database Migrations & Data Ingestion
+### Step 3: Run Database Migrations
 ```powershell
-# 1. Apply schema migration
-python migrate_milestone2.py
-
-# 2. Seed database from synthetic datasets
-python seed_data.py
+# Applies Stage 6 tables and transaction idempotency keys safely
+python migrate_stage6.py
 ```
 
-### Step 4: Start the FastAPI Backend
+### Step 4: Populate Dimensional Data Mart
+```powershell
+python -c "
+from app.database import SessionLocal
+from app.services.etl import refresh_daily_sales_mart
+db = SessionLocal()
+res = refresh_daily_sales_mart(db=db, full_rebuild=True)
+print(res)
+db.close()
+"
+```
+
+### Step 5: Start Backend API
 ```powershell
 uvicorn app.main:app --reload
 ```
-Interactive API docs available at: `http://127.0.0.1:8000/docs`
+Interactive Swagger API docs available at: `http://127.0.0.1:8000/docs`
 
-### Step 5: Launch the Streamlit Dashboard
+### Step 6: Launch Streamlit Dashboard
 ```powershell
 streamlit run dashboard/dashboard.py
 ```
-Open `http://localhost:8501` to explore the 4-tab interactive dashboard.
+Open `http://localhost:8501` to access all 10 dashboard views.
 
 ---
 
-## 6. API Reference (Milestone 2 Additions)
+## 8. API Reference (Stage 6 Additions)
 
-| Category | Method | Endpoint | Description |
+| Method | Endpoint | Description | Guard / Security |
 | :--- | :--- | :--- | :--- |
-| **Sales** | `GET` | `/analytics/summary` | Combined executive sales summary |
-| **Sales** | `GET` | `/analytics/revenue/by-vendor` | Vendor revenue and units sold |
-| **Sales** | `GET` | `/analytics/revenue/by-product` | Product revenue and units sold |
-| **Inventory** | `GET` | `/analytics/inventory/status` | Current stock, valuation, and status badges |
-| **Inventory** | `GET` | `/analytics/inventory/turnover` | Inventory turnover ratios and DSI by product |
-| **Inventory** | `GET` | `/analytics/inventory/low-stock` | Low-stock alerts and depletion days |
-| **Inventory** | `GET` | `/analytics/inventory/replenishment` | Replenishment quantities, ROP, and safety stock |
-| **Inventory** | `GET` | `/analytics/inventory/forecast/{id}` | 14-day demand forecast with MAE, RMSE, WAPE |
-| **Inventory** | `POST`| `/inventory/movements` | Log stock movement (inbound restock, sale, etc.) |
-| **Customer** | `GET` | `/analytics/customers/summary` | Customer lifetime value and repeat purchase rate |
-| **Customer** | `GET` | `/analytics/customers/rfm` | Recency, Frequency, Monetary, and AOV metrics |
-| **Customer** | `GET` | `/analytics/customers/segments` | K-Means clustering and silhouette score |
-| **Recommendations** | `GET` | `/recommendations/customer/{id}` | Personalized Top-N product recommendations |
-| **Recommendations** | `GET` | `/recommendations/popular` | Global top-selling products (cold-start) |
-| **Recommendations** | `GET` | `/recommendations/evaluation` | Offline Precision@K, Recall@K, and Hit Rate |
+| `POST` | `/etl/batches/upload` | Upload CSV for streaming chunked ingestion | Loopback-Guarded |
+| `GET` | `/etl/batches` | List paginated ingestion batches with status filters | Public |
+| `GET` | `/etl/batches/{batch_id}` | Retrieve batch status, counters, and error summaries | Public |
+| `GET` | `/etl/batches/{batch_id}/records` | List raw/staged records for a specific batch | Public |
+| `GET` | `/etl/batches/{batch_id}/reconciliation` | Retrieve structured count & monetary reconciliation | Public |
+| `GET` | `/etl/quarantine` | List quarantined records with status/category filters | Public |
+| `GET` | `/etl/quarantine/{record_id}` | Retrieve single quarantined record detail | Public |
+| `POST` | `/etl/quarantine/{record_id}/reprocess` | Submit manual corrections and reprocess record | Loopback-Guarded |
+| `POST` | `/etl/batches/{batch_id}/reprocess` | Reprocess all pending quarantine records for batch | Loopback-Guarded |
+| `POST` | `/etl/marts/daily-sales/refresh` | Trigger incremental or full Daily Sales Mart refresh | Loopback-Guarded |
+| `GET` | `/etl/marts/daily-sales` | Query aggregated daily sales mart by dimensions | Public |
+| `GET` | `/etl/quality-report` | Platform-wide data quality & reconciliation score | Public |
 
 ---
 
-## 7. Automated Test Suite (85 Passing Tests)
+## 9. Comprehensive Test Suite & Verification
 
-Run the full test suite with verbose output:
+### Running Tests
 ```powershell
-python -m pytest tests/ -v
+# Run dedicated Stage 6 test suite (20 scenarios)
+pytest tests/test_stage6_etl.py -v
+
+# Run full repository regression suite (175 tests)
+pytest tests/ -q
+
+# Run platform consistency validation (12 assertions)
+python validate_consistency.py
 ```
 
-All 85 tests execute against an isolated SQLite database, guaranteeing zero side-effects on production or development PostgreSQL instances:
-- `test_vendors.py` (25 tests) — RFC email validation, phone regex, duplicate rejection, pagination.
-- `test_products.py` (14 tests) — Product creation, FK verification, positive price constraints.
-- `test_inventory.py` (7 tests) — Inventory defaults, constraints, 1-to-1 unique product constraint.
-- `test_analytics.py` (10 tests) — Total revenue, vendor breakdown, product ranking, empty data safety.
-- `test_inventory_analytics.py` (17 tests) — Turnover, stock movements, low-stock alerts, demand forecast, regression lookback tests.
-- `test_customer_analytics.py` (6 tests) — Customer KPIs, RFM metrics, K-Means clustering, silhouette score.
-- `test_recommendations.py` (6 tests) — Popularity fallback, collaborative filtering, Precision@K / Recall@K.
+### Test Suite Summary
+- **Stage 6 Dedicated Suite:** **20 / 20 passed (100%)**
+- **Full Repository Suite:** **175 / 175 passed (100%)**
+- **Consistency Verification:** **12 / 12 passed (100.0% Consistency Score)**
+- **Streamlit AppTest:** **10 / 10 views passed (0 exceptions)**
+
+---
+
+## 10. Historical Data Integrity & Invariants
+
+PostgreSQL database verification confirms zero data loss and zero synthetic data fabrication:
+- **Vendors:** 5 (unchanged)
+- **Products:** 10 (unchanged; legacy products strictly retain `NULL` cost_price)
+- **Customers:** 60 (unchanged)
+- **Transactions:** 600 completed orders across 2024 (unchanged)
+- **Physical Stock On Hand:** 990 units (unchanged)
+- **Stock Movements:** 440 records (unchanged)
+- **Customer Interactions:** 1,342 records (unchanged)
+- **Refunds:** 0 records (unchanged)
+- **Settlements:** 0 records (unchanged)
+- **Gross Merchandise Value (GMV):** ₹87,725.58 (exact match across operational DB and dimensional mart)
+- **Daily Sales Mart:** 541 dimensional records aggregating 100% of historical transactions.

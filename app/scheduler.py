@@ -34,6 +34,7 @@ logger = logging.getLogger("stockpilot.scheduler")
 # Singleton scheduler instance and locks
 _scheduler: Optional[BackgroundScheduler] = None
 _scheduler_lock_flag = False
+_mart_refresh_running = False
 
 _LOCK_FILE_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "stockpilot_scheduler.lock"))
 _LOCK_FILE_HANDLE = None
@@ -409,6 +410,58 @@ def run_analytical_pipeline(db: Optional[Session] = None) -> Dict[str, Any]:
     return report
 
 
+
+def run_scheduled_daily_mart_refresh(
+    db: Optional[Session] = None, full_rebuild: bool = False
+) -> Dict[str, Any]:
+    """
+    Executes the scheduled daily sales mart refresh.
+    Guarantees:
+      - Overlap protection (max_instances=1 and in-process lock).
+      - Safe exception handling and structured logging.
+      - Idempotent execution (upserting aggregates without inflating totals).
+    """
+    global _mart_refresh_running
+    if _mart_refresh_running:
+        logger.warning("Daily Sales Mart refresh is already running; skipping overlapping execution.")
+        return {
+            "status": "SKIPPED",
+            "message": "Overlapping run prevented by execution lock.",
+            "records_upserted": 0,
+        }
+
+    _mart_refresh_running = True
+    start_time = datetime.utcnow()
+    t0 = time.time()
+    logger.info(f"▶ Starting Daily Sales Mart refresh pipeline at {start_time.isoformat()} (full_rebuild={full_rebuild})")
+
+    close_db_session = False
+    if db is None:
+        from app.database import SessionLocal
+        db = SessionLocal()
+        close_db_session = True
+
+    try:
+        from app.services.etl.daily_mart_service import refresh_daily_sales_mart
+        result = refresh_daily_sales_mart(db=db, full_rebuild=full_rebuild)
+        duration_s = round(time.time() - t0, 3)
+        logger.info(f"✔ Daily Sales Mart refresh finished in {duration_s}s: {result.get('message')}")
+        result["duration_seconds"] = duration_s
+        return result
+    except Exception as e:
+        logger.error(f"❌ Daily Sales Mart refresh encountered an error: {e}", exc_info=True)
+        return {
+            "status": "FAILED",
+            "error": str(e),
+            "duration_seconds": round(time.time() - t0, 3),
+            "records_upserted": 0,
+        }
+    finally:
+        _mart_refresh_running = False
+        if close_db_session:
+            db.close()
+
+
 def start_scheduler(
     hour: int = 2,
     minute: int = 0,
@@ -462,6 +515,19 @@ def start_scheduler(
             misfire_grace_time=3600,
         )
 
+        # Schedule daily 01:30 AM Daily Sales Mart dimensional aggregation
+        mart_hour = int(os.getenv("DAILY_MART_CRON_HOUR", "1"))
+        mart_minute = int(os.getenv("DAILY_MART_CRON_MINUTE", "30"))
+        scheduler.add_job(
+            run_scheduled_daily_mart_refresh,
+            trigger=CronTrigger(hour=mart_hour, minute=mart_minute),
+            id="daily_sales_mart_refresh",
+            name="Daily Sales Mart Dimensional Aggregator & ETL Refresh",
+            replace_existing=True,
+            max_instances=1,
+            misfire_grace_time=3600,
+        )
+
         scheduler.start()
         _scheduler_lock_flag = True
         logger.info(
@@ -481,12 +547,14 @@ def stop_scheduler(wait: bool = False) -> bool:
         try:
             _scheduler.shutdown(wait=wait)
             _scheduler_lock_flag = False
+            _mart_refresh_running = False
             logger.info("APScheduler stopped successfully.")
             return True
         except Exception as e:
             logger.error(f"Error while stopping APScheduler: {e}", exc_info=True)
             return False
     _scheduler_lock_flag = False
+    _mart_refresh_running = False
     return True
 
 

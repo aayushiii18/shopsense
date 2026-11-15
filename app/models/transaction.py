@@ -7,7 +7,7 @@ Supports discount allocations, payment methods, payment status, snapshotted comm
 """
 
 from datetime import datetime
-from sqlalchemy import Integer, Float, String, DateTime, ForeignKey, func, CheckConstraint
+from sqlalchemy import Integer, Float, String, DateTime, ForeignKey, func, CheckConstraint, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship, synonym
 from app.database import Base
 
@@ -20,6 +20,7 @@ class Transaction(Base):
         CheckConstraint("unit_price > 0", name="ck_transaction_unit_price_positive"),
         CheckConstraint("amount > 0", name="ck_transaction_amount_positive"),
         CheckConstraint("discount_amount >= 0", name="ck_transaction_discount_nonnegative"),
+        UniqueConstraint("source_system", "source_transaction_id", name="uq_transaction_source"),
     )
 
     transaction_id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
@@ -39,6 +40,8 @@ class Transaction(Base):
     payment_method: Mapped[str] = mapped_column(String(50), default="UNKNOWN", nullable=False)
     payment_status: Mapped[str] = mapped_column(String(50), default="COMPLETED", nullable=False)
     effective_commission_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
+    source_system: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
+    source_transaction_id: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
     transaction_date: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), nullable=False
     )

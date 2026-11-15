@@ -236,6 +236,7 @@ with st.sidebar:
         "📈 Demand Forecasting",
         "🎯 Recommendations",
         "🛍️ Customer Catalog",
+        "⚡ ETL & Data Warehouse",
     ]
 
     selected_page = st.radio(
@@ -1884,3 +1885,346 @@ elif selected_page == "🛍️ Customer Catalog":
                     )
     else:
         st.info("No products currently listed in the store catalog.")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 10. ⚡ ETL & DATA WAREHOUSE OPERATIONS
+# ═════════════════════════════════════════════════════════════════════════════
+elif selected_page == "⚡ ETL & Data Warehouse":
+    import io
+    import json
+    st.title("⚡ ETL & Data Warehouse Operations")
+    st.caption("Bulk CSV Ingestion, Staging Buffer, Quarantine Resolution, Reconciliation Audit & Dimensional Data Marts")
+
+    from app.database import SessionLocal
+    from app.services import etl as etl_service
+
+    tab_batch, tab_import, tab_quarantine, tab_quality, tab_mart = st.tabs([
+        "📊 Batch Monitoring",
+        "📥 Bulk Ingestion",
+        "🚨 Quarantine Management",
+        "🔍 Data Quality & Reconciliation",
+        "🏛️ Data Warehouse Mart",
+    ])
+
+    with tab_batch:
+        st.subheader("Ingestion Batch History & Auditing")
+        db = SessionLocal()
+        try:
+            batches, total_b = etl_service.list_batches(db, limit=50)
+            if batches:
+                df_b = pd.DataFrame(batches)
+                c1, c2, c3, c4, c5 = st.columns(5)
+                c1.metric("Total Batches", total_b)
+                completed_n = len(df_b[df_b["status"] == "COMPLETED"])
+                partial_n = len(df_b[df_b["status"] == "PARTIALLY_COMPLETED"])
+                failed_n = len(df_b[df_b["status"] == "FAILED"])
+                c2.metric("Completed", completed_n)
+                c3.metric("Partially Completed", partial_n)
+                c4.metric("Failed", failed_n)
+                c5.metric("Total Ingested GMV", f"₹{df_b['total_gross_value'].sum():,.2f}")
+
+                st.dataframe(
+                    df_b[[
+                        "batch_id", "source_system", "original_filename", "status",
+                        "total_records", "committed_records", "duplicate_records",
+                        "quarantined_records", "total_gross_value", "processing_duration_ms", "created_at"
+                    ]],
+                    use_container_width=True,
+                )
+
+                # Batch Inspector
+                st.markdown("---")
+                st.markdown("#### 🔎 Inspect Batch Reconciliation & Staged Records")
+                batch_choices = df_b["batch_id"].tolist()
+                chosen_batch_id = st.selectbox("Select Batch ID to Inspect", batch_choices)
+                if chosen_batch_id:
+                    recon = etl_service.reconcile_batch(db, chosen_batch_id)
+                    rc_col1, rc_col2 = st.columns(2)
+                    with rc_col1:
+                        st.markdown("**Record Counts Reconciliation**")
+                        counts = recon.get("record_counts", {})
+                        st.write(f"- Source Reported: `{counts.get('source_total_reported')}`")
+                        st.write(f"- Staged Total: `{counts.get('staged_total')}`")
+                        st.write(f"- Committed to DB: `{counts.get('committed_to_db')}`")
+                        st.write(f"- Duplicates Filtered: `{counts.get('duplicates_detected')}`")
+                        st.write(f"- Quarantined: `{counts.get('quarantined_records')}`")
+                        if counts.get("is_count_reconciled"):
+                            st.success("✔ Count Reconciled (Zero Unaccounted Rows)")
+                        else:
+                            st.warning(f"⚠ Discrepancy: {counts.get('count_discrepancy')} rows")
+
+                    with rc_col2:
+                        st.markdown("**Financial Reconciliation**")
+                        fin = recon.get("financial_reconciliation", {})
+                        st.write(f"- Batch Reported Value: `₹{fin.get('batch_gross_value', 0):,.2f}`")
+                        st.write(f"- Actual DB Sum: `₹{fin.get('actual_db_gross_sum', 0):,.2f}`")
+                        st.write(f"- Discrepancy: `₹{fin.get('discrepancy_amount', 0):,.2f}`")
+                        if fin.get("is_monetarily_reconciled"):
+                            st.success("✔ Monetary Reconciled (100% Value Match)")
+                        else:
+                            st.error("❌ Monetary Discrepancy Detected")
+
+                    # Staged Records preview
+                    stg_records, stg_tot = etl_service.list_batch_staging_records(db, chosen_batch_id, limit=50)
+                    if stg_records:
+                        st.markdown(f"**Staged Records ({stg_tot} total, displaying latest 50):**")
+                        st.dataframe(pd.DataFrame(stg_records)[["staging_id", "row_number", "source_transaction_id", "status", "validation_errors", "target_transaction_id"]], use_container_width=True)
+            else:
+                st.info("No ETL batches have been uploaded yet. Use the 'Bulk Ingestion' tab to upload CSV data.")
+        finally:
+            db.close()
+
+    with tab_import:
+        st.subheader("Bulk Transaction CSV Ingestion")
+        st.markdown(
+            "Upload transaction batches for automated staging, row-level schema validation, "
+            "database-enforced deduplication, quarantine isolation, and financial snapshotting."
+        )
+
+        c_file, c_meta = st.columns([2, 1])
+        with c_file:
+            uploaded_file = st.file_uploader("Select Transaction CSV File", type=["csv"])
+        with c_meta:
+            source_sys = st.text_input("Source System Tag", value="CSV_INGEST")
+            chunk_size = st.number_input("Chunk Size (Rows / Batch)", min_value=100, max_value=10000, value=1000, step=100)
+            sync_inv = st.checkbox("Synchronize Physical Inventory Stock (Decrement)", value=False)
+
+        if uploaded_file is not None:
+            file_bytes = uploaded_file.getvalue()
+            st.info(f"📄 File uploaded: `{uploaded_file.name}` ({len(file_bytes):,} bytes)")
+
+            # Preview first 5 rows
+            try:
+                preview_df = pd.read_csv(io.BytesIO(file_bytes), nrows=5)
+                st.markdown("**File Preview (First 5 Rows):**")
+                st.dataframe(preview_df, use_container_width=True)
+            except Exception as e:
+                st.warning(f"Could not preview CSV: {e}")
+
+            if st.button("🚀 Process Bulk Ingestion", type="primary"):
+                with st.spinner("Processing ingestion pipeline (staging, validation, deduplication, loading)..."):
+                    db = SessionLocal()
+                    try:
+                        batch = etl_service.create_batch(
+                            db=db,
+                            filename=uploaded_file.name,
+                            file_bytes=file_bytes,
+                            source_system=source_sys,
+                        )
+                        res = etl_service.process_csv_batch(
+                            db=db,
+                            batch_id=batch.batch_id,
+                            file_stream=io.BytesIO(file_bytes),
+                            chunk_size=chunk_size,
+                            sync_inventory=sync_inv,
+                            refresh_marts=True,
+                        )
+                        st.success(f"Batch `{batch.batch_id}` processed with status: **{res.get('status')}** in {res.get('processing_duration_ms', 0):,.1f}ms!")
+
+                        sc1, sc2, sc3, sc4 = st.columns(4)
+                        sc1.metric("Committed Records", res.get("committed_records", 0))
+                        sc2.metric("Duplicate Filtered", res.get("duplicate_records", 0))
+                        sc3.metric("Quarantined Records", res.get("quarantined_records", 0))
+                        sc4.metric("Gross Ingested Value", f"₹{res.get('total_gross_value', 0):,.2f}")
+                    except Exception as ex:
+                        st.error(f"Ingestion failed: {ex}")
+                    finally:
+                        db.close()
+
+    with tab_quarantine:
+        st.subheader("Quarantine Isolation & Resolution Workflow")
+        st.caption("Inspect, correct, and safely reprocess records that failed schema validation, reference integrity, or business logic.")
+
+        db = SessionLocal()
+        try:
+            status_filter = st.selectbox("Resolution Status", ["All", "PENDING", "RESOLVED", "IGNORED"], index=1)
+            q_filter = None if status_filter == "All" else status_filter
+
+            quarantine_list, total_q = etl_service.list_quarantine_records(db, resolution_status=q_filter, limit=100)
+            st.metric("Quarantine Entries", total_q)
+
+            if quarantine_list:
+                df_q = pd.DataFrame(quarantine_list)
+                st.dataframe(
+                    df_q[[
+                        "quarantine_id", "batch_id", "row_number", "source_transaction_id",
+                        "error_category", "error_details", "resolution_status", "reprocessing_attempts", "created_at"
+                    ]],
+                    use_container_width=True,
+                )
+
+                st.markdown("---")
+                st.markdown("#### 🛠️ Triage & Reprocess Quarantined Record")
+                q_ids = df_q["quarantine_id"].tolist()
+                sel_qid = st.selectbox("Select Quarantine ID to Correct", q_ids)
+
+                if sel_qid:
+                    rec = etl_service.get_quarantine_record(db, sel_qid)
+                    if rec:
+                        st.write(f"**Error Category:** `{rec.error_category}`")
+                        st.error(f"**Error Details:** {rec.error_details}")
+
+                        try:
+                            raw_dict = json.loads(rec.raw_data) if isinstance(rec.raw_data, str) else rec.raw_data
+                        except Exception:
+                            raw_dict = {}
+
+                        with st.form(f"reprocess_form_{sel_qid}"):
+                            st.markdown("**Editable Fields for Correction:**")
+                            corr_cols = st.columns(3)
+                            corr_pid = corr_cols[0].text_input("Product ID", value=str(raw_dict.get("product_id", "")))
+                            corr_vid = corr_cols[1].text_input("Vendor ID", value=str(raw_dict.get("vendor_id", "")))
+                            corr_cid = corr_cols[2].text_input("Customer ID", value=str(raw_dict.get("customer_id", "")))
+
+                            corr_cols2 = st.columns(3)
+                            corr_qty = corr_cols2[0].text_input("Quantity", value=str(raw_dict.get("quantity", "")))
+                            corr_price = corr_cols2[1].text_input("Unit Price", value=str(raw_dict.get("unit_price", "")))
+                            corr_disc = corr_cols2[2].text_input("Discount Amount", value=str(raw_dict.get("discount_amount", "0.0")))
+
+                            submit_corr = st.form_submit_button("Retry Validation & Commit Record")
+                            if submit_corr:
+                                corrected_payload = {
+                                    "product_id": corr_pid,
+                                    "vendor_id": corr_vid,
+                                    "customer_id": corr_cid if corr_cid else None,
+                                    "quantity": corr_qty,
+                                    "unit_price": corr_price,
+                                    "discount_amount": corr_disc,
+                                }
+                                rep_res = etl_service.reprocess_quarantine_record(
+                                    db=db,
+                                    quarantine_id=sel_qid,
+                                    corrected_data=corrected_payload,
+                                )
+                                if rep_res.get("success"):
+                                    st.success(f"✔ {rep_res.get('message')}")
+                                    st.rerun()
+                                else:
+                                    st.error(f"❌ Reprocessing failed: {rep_res.get('message')} — Errors: {rep_res.get('errors')}")
+            else:
+                st.success("🎉 No quarantined records matching the selected filter! All records in healthy state.")
+        finally:
+            db.close()
+
+    with tab_quality:
+        st.subheader("Platform-Wide Data Quality & Governance Benchmarks")
+        db = SessionLocal()
+        try:
+            report = etl_service.get_platform_data_quality_report(db)
+
+            # Health badge
+            status_color = "🟢 HEALTHY" if report.get("status") == "HEALTHY" else "🔴 ATTENTION"
+            st.markdown(f"### Overall System Health: **{status_color}**")
+
+            # Metrics
+            op = report.get("operational_metrics", {})
+            mart_m = report.get("warehouse_mart_metrics", {})
+            q_c1, q_c2, q_c3, q_c4 = st.columns(4)
+            q_c1.metric("Operational GMV", f"₹{op.get('gross_merchandise_value_gmv', 0):,.2f}")
+            q_c2.metric("Operational Net Sales", f"₹{op.get('operational_net_sales', 0):,.2f}")
+            q_c3.metric("Warehouse Mart GMV", f"₹{mart_m.get('mart_gross_gmv', 0):,.2f}")
+            q_c4.metric("Warehouse Mart Net Sales", f"₹{mart_m.get('mart_net_sales', 0):,.2f}")
+
+            # Verification cards
+            st.markdown("---")
+            vc1, vc2 = st.columns(2)
+            with vc1:
+                st.markdown("#### 🛡️ Referential & Deduplication Integrity")
+                ref = report.get("referential_integrity", {})
+                dedup = report.get("deduplication_integrity", {})
+                st.write(f"- Orphaned Transaction Products: `{ref.get('orphaned_transaction_products')}`")
+                st.write(f"- Orphaned Transaction Vendors: `{ref.get('orphaned_transaction_vendors')}`")
+                st.write(f"- Duplicate Source Transactions in DB: `{dedup.get('duplicate_source_transactions_in_db')}`")
+                if ref.get("referential_integrity_passed") and dedup.get("deduplication_passed"):
+                    st.success("✔ Referential Integrity & Deduplication Invariants Verified (100% Pass)")
+                else:
+                    st.error("❌ Integrity check failed")
+
+            with vc2:
+                st.markdown("#### ⚖️ Stage 4 Financial Governance & Nullable COGS")
+                fin_gov = report.get("financial_governance", {})
+                st.write(f"- Cost-Verified Products: `{fin_gov.get('costed_products')}`")
+                st.write(f"- Uncosted Legacy Products: `{fin_gov.get('uncosted_legacy_products')}` (NULL cost_price)")
+                st.write(f"- Catalog COGS Coverage: `{fin_gov.get('cogs_coverage_pct')}%`")
+                st.write(f"- Nullable COGS Safeguard Active: `{fin_gov.get('nullable_cogs_policy_compliant')}`")
+                st.info("ℹ️ Zero Data Fabrication: Historical uncosted catalog items strictly retain NULL cost_price.")
+        finally:
+            db.close()
+
+    with tab_mart:
+        st.subheader("Dimensional Daily Sales Mart (Data Warehouse)")
+        st.caption("Granular aggregation at (Date, Product, Vendor) grain with Stage 4 financial profit calculations.")
+
+        db = SessionLocal()
+        try:
+            m_c1, m_c2 = st.columns([3, 1])
+            with m_c2:
+                rebuild_toggle = st.checkbox("Full Historical Rebuild", value=False)
+                if st.button("🔄 Refresh Sales Mart", type="secondary"):
+                    with st.spinner("Aggregating dimensional mart..."):
+                        refresh_res = etl_service.refresh_daily_sales_mart(db=db, full_rebuild=rebuild_toggle)
+                        st.success(f"{refresh_res.get('message')}")
+                        st.rerun()
+
+            records, total_m, summary = etl_service.query_daily_sales_mart(db, limit=200)
+
+            # Summary Metrics Row
+            sm1, sm2, sm3, sm4, sm5 = st.columns(5)
+            sm1.metric("Mart Records", total_m)
+            sm2.metric("Total Units Sold", f"{summary.get('total_units_sold', 0):,}")
+            sm3.metric("Gross Sales GMV", f"₹{summary.get('total_gross_gmv', 0):,.2f}")
+            sm4.metric("Discounts Total", f"₹{summary.get('total_discounts', 0):,.2f}")
+            sm5.metric("Net Sales Total", f"₹{summary.get('total_net_sales', 0):,.2f}")
+
+            if records:
+                df_mart = pd.DataFrame(records)
+
+                # Daily sales trend chart
+                st.markdown("---")
+                st.markdown("#### 📈 Historical Daily Sales Trend (GMV & Net Sales)")
+                daily_trend = (
+                    df_mart.groupby("date")[["gross_sales_gmv", "net_sales"]]
+                    .sum()
+                    .reset_index()
+                    .sort_values("date")
+                )
+                fig_trend = go.Figure()
+                fig_trend.add_trace(go.Scatter(
+                    x=daily_trend["date"],
+                    y=daily_trend["gross_sales_gmv"],
+                    mode="lines+markers",
+                    name="Gross Sales GMV",
+                    line=dict(color="#3b82f6", width=2),
+                ))
+                fig_trend.add_trace(go.Scatter(
+                    x=daily_trend["date"],
+                    y=daily_trend["net_sales"],
+                    mode="lines",
+                    name="Net Sales",
+                    line=dict(color="#10b981", width=2, dash="dot"),
+                ))
+                fig_trend.update_layout(
+                    title="Daily Gross vs Net Sales Ingestion",
+                    xaxis_title="Date",
+                    yaxis_title="Amount (₹)",
+                    template="plotly_dark",
+                    hovermode="x unified",
+                    height=350,
+                )
+                st.plotly_chart(fig_trend, use_container_width=True)
+
+                # Table
+                st.markdown("#### 📋 Dimensional Records (Date x Product x Vendor)")
+                st.dataframe(
+                    df_mart[[
+                        "date", "product_id", "vendor_id", "category",
+                        "units_sold", "gross_sales_gmv", "discounts_total", "refunds_total", "net_sales",
+                        "known_cogs", "reported_gross_profit", "cogs_coverage_pct", "transaction_count"
+                    ]],
+                    use_container_width=True,
+                )
+            else:
+                st.info("Daily sales mart is currently empty. Click 'Refresh Sales Mart' above to populate from transactions.")
+        finally:
+            db.close()
