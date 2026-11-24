@@ -13,6 +13,7 @@ import os
 from typing import Optional, List
 
 from fastapi import Depends, HTTPException, Request, status, Header
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -20,6 +21,8 @@ from app.core.security import decode_token, is_loopback_address
 from app.models.user import User, UserRole
 
 logger = logging.getLogger(__name__)
+
+bearer_security = HTTPBearer(auto_error=False, description="JWT Bearer token. Enter: Bearer <token>")
 
 
 def _is_legacy_test_client(request: Request) -> bool:
@@ -46,13 +49,28 @@ def _is_legacy_test_client(request: Request) -> bool:
 def get_current_user(
     request: Request,
     db: Session = Depends(get_db),
+    bearer_auth: Optional[HTTPAuthorizationCredentials] = Depends(bearer_security),
     authorization: Optional[str] = Header(None, alias="Authorization"),
 ) -> User:
     """
     FastAPI dependency extracting and verifying the authenticated user from the Bearer JWT token.
+    Supports OpenAPI HTTPBearer authorization scheme as well as raw Authorization headers.
     Enforces active account status and fail-closed security.
     """
-    if not authorization:
+    # Extract raw token from HTTPBearer scheme or Authorization header
+    token: Optional[str] = None
+    if bearer_auth and bearer_auth.credentials:
+        token = bearer_auth.credentials.strip()
+    elif authorization:
+        if not authorization.startswith("Bearer "):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid authorization scheme. Bearer token required.",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        token = authorization[7:].strip()
+
+    if not token:
         # Check for legacy test client compatibility
         if _is_legacy_test_client(request):
             # Return an administrative test user for legacy test execution
@@ -89,15 +107,6 @@ def get_current_user(
             detail="Authentication credentials were not provided.",
             headers={"WWW-Authenticate": "Bearer"},
         )
-
-    if not authorization.startswith("Bearer "):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authorization scheme. Bearer token required.",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    token = authorization[7:].strip()
     if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

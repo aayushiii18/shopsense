@@ -134,7 +134,11 @@ def replenishment_recommendations(
     )
 
 
-@router.get("/forecast/{product_id}", summary="Time-Series Demand Forecasting with Seasonality")
+@router.get(
+    "/forecast/{product_id}",
+    tags=["Forecasting API", "Inventory Analytics"],
+    summary="Time-Series Demand Forecasting with Seasonality",
+)
 def demand_forecast(
     product_id: int,
     forecast_days: int = Query(14, ge=1, le=90, description="Days to forecast ahead"),

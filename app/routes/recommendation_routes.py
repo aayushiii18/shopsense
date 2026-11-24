@@ -24,8 +24,8 @@ from app.schemas.recommendation_schema import (
 from app.core.dependencies import get_current_user, verify_customer_tenant
 from app.models.user import User
 
-router = APIRouter(prefix="/recommendations", tags=["Recommendation Engine"])
-recommend_router = APIRouter(tags=["Recommendation Engine"])
+router = APIRouter(prefix="/recommendations", tags=["Recommendation API", "Recommendation Engine"])
+recommend_router = APIRouter(tags=["Recommendation API", "Recommendation Engine"])
 
 
 @recommend_router.get(

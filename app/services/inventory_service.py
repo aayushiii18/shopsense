@@ -682,12 +682,25 @@ def predict_monthly_demand(
 
     model = _CACHED_FORECAST_MODEL
     if model is None:
-        if os.path.exists(model_path):
-            try:
-                model = joblib.load(model_path)
-                _CACHED_FORECAST_MODEL = model
-            except Exception:
-                pass
+        candidate_paths = []
+        try:
+            from backend.config import get_settings
+            cfg_p = get_settings().forecast_model_path
+            if cfg_p and cfg_p not in candidate_paths:
+                candidate_paths.append(cfg_p)
+        except Exception:
+            pass
+        if model_path and model_path not in candidate_paths:
+            candidate_paths.append(model_path)
+
+        for p in candidate_paths:
+            if os.path.exists(p):
+                try:
+                    model = joblib.load(p)
+                    _CACHED_FORECAST_MODEL = model
+                    break
+                except Exception:
+                    pass
         if model is None:
             try:
                 from track_inventory import load_registered_inventory_model

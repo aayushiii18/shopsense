@@ -13,7 +13,7 @@ from app.database import get_db
 from app.services import inventory_service
 from app.schemas.revenue_schema import ForecastResponse
 
-router = APIRouter(tags=["Demand Forecasting"])
+router = APIRouter(tags=["Forecasting API", "Demand Forecasting"])
 
 
 @router.get(

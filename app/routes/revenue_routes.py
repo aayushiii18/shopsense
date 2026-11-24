@@ -32,7 +32,7 @@ from app.schemas.revenue_schema import (
 from app.core.dependencies import require_vendor_or_admin
 from app.models.user import User, UserRole
 
-router = APIRouter(tags=["Revenue & Vendor Analytics"])
+router = APIRouter(tags=["Sales API", "Revenue & Vendor Analytics"])
 
 
 @router.get(

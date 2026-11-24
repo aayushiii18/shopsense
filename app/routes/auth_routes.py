@@ -159,6 +159,7 @@ def change_password(
     "/admin/users",
     response_model=UserResponse,
     status_code=status.HTTP_201_CREATED,
+    tags=["Admin API", "Authentication & Access Control"],
     summary="Admin create user account (ADMIN, VENDOR, CUSTOMER)",
 )
 def admin_create_user(
@@ -176,6 +177,7 @@ def admin_create_user(
 @router.get(
     "/admin/users",
     response_model=List[UserResponse],
+    tags=["Admin API", "Authentication & Access Control"],
     summary="Admin list all users",
 )
 def admin_list_users(
@@ -192,6 +194,7 @@ def admin_list_users(
 @router.get(
     "/admin/users/{user_id}",
     response_model=UserResponse,
+    tags=["Admin API", "Authentication & Access Control"],
     summary="Admin get user details by ID",
 )
 def admin_get_user(
@@ -206,6 +209,7 @@ def admin_get_user(
 @router.patch(
     "/admin/users/{user_id}/status",
     response_model=UserResponse,
+    tags=["Admin API", "Authentication & Access Control"],
     summary="Admin update user active/verified status",
 )
 def admin_update_user_status(
@@ -224,6 +228,7 @@ def admin_update_user_status(
 @router.patch(
     "/admin/users/{user_id}/role",
     response_model=UserResponse,
+    tags=["Admin API", "Authentication & Access Control"],
     summary="Admin change user role and tenant linkage",
 )
 def admin_update_user_role(

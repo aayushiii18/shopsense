@@ -6,9 +6,11 @@ GET /analytics/revenue/by-vendor      Revenue grouped by vendor
 GET /analytics/revenue/by-product     Revenue grouped by product
 GET /analytics/top-selling-product    Product with highest total units sold
 GET /analytics/summary                Combined marketplace summary report
+GET /analytics/transactions           Paginated list of transactions
 """
 
-from fastapi import APIRouter, Depends, HTTPException
+from typing import List, Optional
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 import pandas as pd
@@ -19,14 +21,22 @@ from app.models.vendor import Vendor
 from app.models.product import Product
 from app.models.user import User, UserRole
 from app.core.dependencies import get_current_user
+from app.schemas.revenue_schema import (
+    TotalRevenueSummaryResponse,
+    VendorRevenueItem,
+    ProductRevenueItem,
+    TopSellingProductResponse,
+    AnalyticsSummaryResponse,
+    TransactionListItem,
+)
 
-router = APIRouter(prefix="/analytics", tags=["Analytics"])
+router = APIRouter(prefix="/analytics", tags=["Sales API", "Analytics"])
 
 
 def _load_transactions_df(db: Session) -> pd.DataFrame:
     """
     Load all transaction rows into a Pandas DataFrame.
-    Returns an empty DataFrame (with correct columns) if no data exists.
+    Retained for backward compatibility and analytical consumers.
     """
     rows = (
         db.query(
@@ -61,114 +71,150 @@ def _load_transactions_df(db: Session) -> pd.DataFrame:
     ])
 
 
-@router.get("/revenue/total", summary="Total revenue across all transactions")
+@router.get(
+    "/revenue/total",
+    response_model=TotalRevenueSummaryResponse,
+    summary="Total revenue across all transactions",
+)
 def total_revenue(db: Session = Depends(get_db)):
-    """Returns the sum of amount for every transaction."""
-    df = _load_transactions_df(db)
-    if df.empty:
-        return {"total_revenue": 0.0, "transaction_count": 0}
+    """Returns the sum of amount and transaction count across all transactions via optimized SQL."""
+    row = (
+        db.query(
+            func.coalesce(func.sum(Transaction.amount), 0.0).label("total_rev"),
+            func.count(Transaction.transaction_id).label("tx_count"),
+        )
+        .first()
+    )
+    rev = round(float(row.total_rev if row and row.total_rev is not None else 0.0), 2)
+    cnt = int(row.tx_count if row and row.tx_count is not None else 0)
     return {
-        "total_revenue": round(float(df["amount"].sum()), 2),
-        "transaction_count": int(len(df)),
+        "total_revenue": rev,
+        "transaction_count": cnt,
     }
 
 
-@router.get("/revenue/by-vendor", summary="Revenue grouped by vendor")
+@router.get(
+    "/revenue/by-vendor",
+    response_model=List[VendorRevenueItem],
+    summary="Revenue grouped by vendor",
+)
 def revenue_by_vendor(db: Session = Depends(get_db)):
-    """Returns total revenue and transaction count for each vendor."""
-    df = _load_transactions_df(db)
-    if df.empty:
-        return []
-
-    grouped = (
-        df.groupby(["vendor_id", "vendor_name"])
-        .agg(
-            total_revenue=("amount", "sum"),
-            transaction_count=("transaction_id", "count"),
-            total_units_sold=("quantity", "sum"),
+    """Returns total revenue, units sold, and transaction count for each vendor via optimized SQL."""
+    rows = (
+        db.query(
+            Transaction.vendor_id,
+            Vendor.name.label("vendor_name"),
+            func.coalesce(func.sum(Transaction.amount), 0.0).label("total_revenue"),
+            func.count(Transaction.transaction_id).label("transaction_count"),
+            func.coalesce(func.sum(Transaction.quantity), 0).label("total_units_sold"),
         )
-        .reset_index()
-        .sort_values("total_revenue", ascending=False)
+        .join(Vendor, Transaction.vendor_id == Vendor.id)
+        .group_by(Transaction.vendor_id, Vendor.name)
+        .order_by(func.sum(Transaction.amount).desc())
+        .all()
     )
 
     return [
         {
-            "vendor_id": int(row["vendor_id"]),
-            "vendor_name": row["vendor_name"],
-            "total_revenue": round(float(row["total_revenue"]), 2),
-            "transaction_count": int(row["transaction_count"]),
-            "total_units_sold": int(row["total_units_sold"]),
+            "vendor_id": int(r.vendor_id),
+            "vendor_name": r.vendor_name,
+            "total_revenue": round(float(r.total_revenue), 2),
+            "transaction_count": int(r.transaction_count),
+            "total_units_sold": int(r.total_units_sold),
         }
-        for _, row in grouped.iterrows()
+        for r in rows
     ]
 
 
-@router.get("/revenue/by-product", summary="Revenue grouped by product")
+@router.get(
+    "/revenue/by-product",
+    response_model=List[ProductRevenueItem],
+    summary="Revenue grouped by product",
+)
 def revenue_by_product(db: Session = Depends(get_db)):
-    """Returns total revenue and units sold for each product."""
-    df = _load_transactions_df(db)
-    if df.empty:
-        return []
-
-    grouped = (
-        df.groupby(["product_id", "product_name", "vendor_id"])
-        .agg(
-            total_revenue=("amount", "sum"),
-            total_units_sold=("quantity", "sum"),
-            transaction_count=("transaction_id", "count"),
+    """Returns total revenue, units sold, and transaction count for each product via optimized SQL."""
+    rows = (
+        db.query(
+            Transaction.product_id,
+            Product.name.label("product_name"),
+            Transaction.vendor_id,
+            func.coalesce(func.sum(Transaction.amount), 0.0).label("total_revenue"),
+            func.coalesce(func.sum(Transaction.quantity), 0).label("total_units_sold"),
+            func.count(Transaction.transaction_id).label("transaction_count"),
         )
-        .reset_index()
-        .sort_values("total_revenue", ascending=False)
+        .join(Product, Transaction.product_id == Product.id)
+        .group_by(Transaction.product_id, Product.name, Transaction.vendor_id)
+        .order_by(func.sum(Transaction.amount).desc())
+        .all()
     )
 
     return [
         {
-            "product_id": int(row["product_id"]),
-            "product_name": row["product_name"],
-            "vendor_id": int(row["vendor_id"]),
-            "total_revenue": round(float(row["total_revenue"]), 2),
-            "total_units_sold": int(row["total_units_sold"]),
-            "transaction_count": int(row["transaction_count"]),
+            "product_id": int(r.product_id),
+            "product_name": r.product_name,
+            "vendor_id": int(r.vendor_id),
+            "total_revenue": round(float(r.total_revenue), 2),
+            "total_units_sold": int(r.total_units_sold),
+            "transaction_count": int(r.transaction_count),
         }
-        for _, row in grouped.iterrows()
+        for r in rows
     ]
 
 
-@router.get("/top-selling-product", summary="Product with highest total units sold")
+@router.get(
+    "/top-selling-product",
+    response_model=TopSellingProductResponse,
+    summary="Product with highest total units sold",
+)
 def top_selling_product(db: Session = Depends(get_db)):
-    """Returns the product with the most total units sold across all transactions."""
-    df = _load_transactions_df(db)
-    if df.empty:
-        raise HTTPException(status_code=404, detail="No transactions found.")
-
-    by_product = (
-        df.groupby(["product_id", "product_name"])["quantity"]
-        .sum()
-        .reset_index()
+    """Returns the product with the most total units sold across all transactions via optimized SQL."""
+    top = (
+        db.query(
+            Transaction.product_id,
+            Product.name.label("product_name"),
+            func.coalesce(func.sum(Transaction.quantity), 0).label("total_units_sold"),
+        )
+        .join(Product, Transaction.product_id == Product.id)
+        .group_by(Transaction.product_id, Product.name)
+        .order_by(func.sum(Transaction.quantity).desc(), Transaction.product_id.asc())
+        .first()
     )
-    top = by_product.loc[by_product["quantity"].idxmax()]
+    if not top:
+        raise HTTPException(status_code=404, detail="No transactions found.")
     return {
-        "product_id": int(top["product_id"]),
-        "product_name": top["product_name"],
-        "total_units_sold": int(top["quantity"]),
+        "product_id": int(top.product_id),
+        "product_name": top.product_name,
+        "total_units_sold": int(top.total_units_sold),
     }
 
 
-@router.get("/summary", summary="Marketplace summary report")
+@router.get(
+    "/summary",
+    response_model=AnalyticsSummaryResponse,
+    summary="Marketplace summary report",
+)
 def analytics_summary(db: Session = Depends(get_db)):
     """
-    Combined baseline marketplace report:
+    Combined baseline marketplace report via direct database aggregations:
     - Total revenue & transaction count
     - Number of active vendors & products
     - Top-selling product (by units)
     - Top vendor (by revenue)
     """
-    df = _load_transactions_df(db)
+    vendor_count = db.query(func.count(Vendor.id)).scalar() or 0
+    product_count = db.query(func.count(Product.id)).scalar() or 0
 
-    vendor_count = db.query(func.count(Vendor.id)).scalar()
-    product_count = db.query(func.count(Product.id)).scalar()
+    totals = (
+        db.query(
+            func.coalesce(func.sum(Transaction.amount), 0.0),
+            func.count(Transaction.transaction_id),
+        )
+        .first()
+    )
+    total_rev = round(float(totals[0] if totals and totals[0] is not None else 0.0), 2)
+    tx_count = int(totals[1] if totals and totals[1] is not None else 0)
 
-    if df.empty:
+    if tx_count == 0:
         return {
             "total_revenue": 0.0,
             "transaction_count": 0,
@@ -178,39 +224,60 @@ def analytics_summary(db: Session = Depends(get_db)):
             "top_vendor_by_revenue": None,
         }
 
-    total_rev = round(float(df["amount"].sum()), 2)
+    top_prod = (
+        db.query(
+            Transaction.product_id,
+            Product.name.label("product_name"),
+            func.coalesce(func.sum(Transaction.quantity), 0).label("total_units_sold"),
+        )
+        .join(Product, Transaction.product_id == Product.id)
+        .group_by(Transaction.product_id, Product.name)
+        .order_by(func.sum(Transaction.quantity).desc(), Transaction.product_id.asc())
+        .first()
+    )
 
-    by_product = df.groupby(["product_id", "product_name"])["quantity"].sum().reset_index()
-    top_product = by_product.loc[by_product["quantity"].idxmax()]
-
-    by_vendor = df.groupby(["vendor_id", "vendor_name"])["amount"].sum().reset_index()
-    top_vendor = by_vendor.loc[by_vendor["amount"].idxmax()]
+    top_vend = (
+        db.query(
+            Transaction.vendor_id,
+            Vendor.name.label("vendor_name"),
+            func.coalesce(func.sum(Transaction.amount), 0.0).label("amount"),
+        )
+        .join(Vendor, Transaction.vendor_id == Vendor.id)
+        .group_by(Transaction.vendor_id, Vendor.name)
+        .order_by(func.sum(Transaction.amount).desc(), Transaction.vendor_id.asc())
+        .first()
+    )
 
     return {
         "total_revenue": total_rev,
-        "transaction_count": int(len(df)),
+        "transaction_count": tx_count,
         "vendor_count": vendor_count,
         "product_count": product_count,
         "top_selling_product": {
-            "product_id": int(top_product["product_id"]),
-            "product_name": top_product["product_name"],
-            "total_units_sold": int(top_product["quantity"]),
-        },
+            "product_id": int(top_prod.product_id),
+            "product_name": top_prod.product_name,
+            "total_units_sold": int(top_prod.total_units_sold),
+        } if top_prod else None,
         "top_vendor_by_revenue": {
-            "vendor_id": int(top_vendor["vendor_id"]),
-            "vendor_name": top_vendor["vendor_name"],
-            "total_revenue": round(float(top_vendor["amount"]), 2),
-        },
+            "vendor_id": int(top_vend.vendor_id),
+            "vendor_name": top_vend.vendor_name,
+            "total_revenue": round(float(top_vend.amount), 2),
+        } if top_vend else None,
     }
 
 
-@router.get("/transactions", summary="List transactions with joined product and vendor details")
+@router.get(
+    "/transactions",
+    response_model=List[TransactionListItem],
+    summary="List transactions with joined product and vendor details",
+)
 def list_transactions(
-    limit: int = 200,
+    skip: int = Query(0, ge=0, description="Offset for pagination"),
+    limit: int = Query(200, ge=1, le=1000, description="Maximum number of transactions to return"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Return recent transaction records with join details, tenant-filtered by caller role."""
+    """Return recent transaction records with join details, paginated and tenant-filtered by caller role."""
     query = (
         db.query(
             Transaction.transaction_id,
@@ -237,7 +304,8 @@ def list_transactions(
         query = query.filter(Transaction.customer_id == current_user.customer_id)
 
     rows = (
-        query.order_by(Transaction.transaction_date.desc())
+        query.order_by(Transaction.transaction_date.desc(), Transaction.transaction_id.desc())
+        .offset(skip)
         .limit(limit)
         .all()
     )

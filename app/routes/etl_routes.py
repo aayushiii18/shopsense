@@ -40,7 +40,7 @@ from app.services import etl as etl_service
 
 router = APIRouter(
     prefix="/etl",
-    tags=["ETL & Data Warehouse"],
+    tags=["Admin API", "ETL & Data Warehouse"],
     dependencies=[Depends(require_admin)],
 )
 

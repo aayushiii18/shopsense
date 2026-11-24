@@ -1,5 +1,5 @@
 """
-app/main.py — FastAPI application entry point for StockPilot.
+app/main.py — FastAPI application entry point for ShopSense Analytics Platform.
 
 Start the server:
     uvicorn app.main:app --reload
@@ -23,45 +23,71 @@ from app.routes import (
     catalog_routes,
     etl_routes,
     auth_routes,
+    admin_routes,
 )
 from backend.config import get_settings
 
 settings = get_settings()
 
+openapi_tags = [
+    {
+        "name": "Sales API",
+        "description": "Sales, GMV, category, regional, and vendor revenue analytics endpoints.",
+    },
+    {
+        "name": "Forecasting API",
+        "description": "Inventory demand forecasting and stock requirement prediction endpoints.",
+    },
+    {
+        "name": "Recommendation API",
+        "description": "Personalized collaborative filtering, content-based, and cold-start product recommendations.",
+    },
+    {
+        "name": "Admin API",
+        "description": "Administrative endpoints for platform overview, system metrics, and governance.",
+    },
+]
+
 app = FastAPI(
-    title=f"{settings.project_name} — Retail Management Platform for Inventory Control and Sales Analytics",
-    description=(
-        "Smarter Stock. Better Decisions. "
-        "An intelligent retail management platform featuring inventory analytics, "
-        "advanced revenue analysis, demand forecasting, customer segmentation, "
-        "and personalized product recommendations."
-    ),
-    version=settings.version,
+    title="ShopSense Analytics Platform",
+    description="Production Retail Marketplace Analytics Platform",
+    version=settings.version if settings.version == "1.0.0" else "1.0.0",
+    openapi_tags=openapi_tags,
 )
 
 # ── Register routers ────────────────────────────────────────────────────────
-app.include_router(vendor_routes.router)
-app.include_router(product_routes.router)
-app.include_router(analytics_routes.router)
+# Sales API routers
 app.include_router(revenue_routes.router)
+app.include_router(analytics_routes.router)
+
+# Forecasting API routers
+app.include_router(forecast_routes.router)
 app.include_router(inventory_routes.router)
 app.include_router(inventory_routes.movement_router)
-app.include_router(forecast_routes.router)
-app.include_router(customer_routes.router)
+
+# Recommendation API routers
 app.include_router(recommendation_routes.router)
 app.include_router(recommendation_routes.recommend_router)
+
+# Admin API & Security routers
+app.include_router(admin_routes.router)
+app.include_router(auth_routes.router)
+app.include_router(etl_routes.router)
+
+# Core domain & auxiliary routers
+app.include_router(vendor_routes.router)
+app.include_router(product_routes.router)
+app.include_router(customer_routes.router)
 app.include_router(report_routes.router)
 app.include_router(refund_routes.router)
 app.include_router(offer_routes.router)
 app.include_router(catalog_routes.router)
-app.include_router(etl_routes.router)
-app.include_router(auth_routes.router)
 
 
 @app.get("/", tags=["Health"])
 def root():
     """Health-check endpoint."""
-    return {"status": "ok", "message": "StockPilot API is running."}
+    return {"status": "ok", "message": "ShopSense API is running."}
 
 
 @app.on_event("startup")
