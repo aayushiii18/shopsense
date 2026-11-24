@@ -311,10 +311,13 @@ Open `http://localhost:8501` to access all 10 dashboard views.
 
 ### Running Tests
 ```powershell
+# Run production configuration test suite (11 tests)
+pytest tests/test_config.py -v
+
 # Run dedicated Stage 7 security test suite (46 scenarios)
 pytest tests/test_stage7_auth_security.py -v
 
-# Run full repository regression suite (221 tests)
+# Run full repository regression suite (232 tests)
 pytest tests/ -q
 
 # Run platform consistency validation (12 assertions)
@@ -322,9 +325,10 @@ python validate_consistency.py
 ```
 
 ### Test Suite Summary
+- **Production Configuration Suite:** **11 / 11 passed (100%)**
 - **Stage 7 Dedicated Suite:** **46 / 46 passed (100%)** (including Stage 7.1 session revocation & backend authorization hardening)
 - **Stage 6 Dedicated Suite:** **20 / 20 passed (100%)**
-- **Full Repository Suite:** **221 / 221 passed (100%)**
+- **Full Repository Suite:** **232 / 232 passed (100%)**
 - **Consistency Verification:** **12 / 12 passed (100.0% Consistency Score)**
 - **Streamlit AppTest:** **10 / 10 views passed (0 exceptions)**
 

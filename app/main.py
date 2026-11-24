@@ -24,16 +24,19 @@ from app.routes import (
     etl_routes,
     auth_routes,
 )
+from backend.config import get_settings
+
+settings = get_settings()
 
 app = FastAPI(
-    title="StockPilot — Retail Management Platform for Inventory Control and Sales Analytics",
+    title=f"{settings.project_name} — Retail Management Platform for Inventory Control and Sales Analytics",
     description=(
         "Smarter Stock. Better Decisions. "
         "An intelligent retail management platform featuring inventory analytics, "
         "advanced revenue analysis, demand forecasting, customer segmentation, "
         "and personalized product recommendations."
     ),
-    version="3.0.0",
+    version=settings.version,
 )
 
 # ── Register routers ────────────────────────────────────────────────────────

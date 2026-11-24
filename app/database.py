@@ -9,6 +9,7 @@ import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
 from dotenv import load_dotenv
+from backend.config import get_settings
 
 load_dotenv()  # loads .env if present
 
@@ -18,7 +19,8 @@ class Base(DeclarativeBase):
     pass
 
 
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./stockpilot_dev.db")
+settings = get_settings()
+DATABASE_URL = settings.database_url
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
