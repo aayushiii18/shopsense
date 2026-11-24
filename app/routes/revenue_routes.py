@@ -13,8 +13,8 @@ Endpoints:
   GET  /analytics/vendors/payouts       Multi-vendor settlement sheet (Loopback-Guarded)
 """
 
-from typing import List
-from fastapi import APIRouter, Depends
+from typing import List, Optional
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -29,7 +29,8 @@ from app.schemas.revenue_schema import (
     RegionalRevenueResponse,
     VendorSettlementResponse,
 )
-from app.core.security import verify_loopback_only
+from app.core.dependencies import require_vendor_or_admin
+from app.models.user import User, UserRole
 
 router = APIRouter(tags=["Revenue & Vendor Analytics"])
 
@@ -111,12 +112,26 @@ def revenue_by_region(db: Session = Depends(get_db)):
 @router.get(
     "/analytics/vendors/payouts",
     response_model=VendorSettlementResponse,
-    summary="Vendor Settlement Sheet & Payouts (Loopback-Guarded)",
-    dependencies=[Depends(verify_loopback_only)],
+    summary="Vendor Settlement Sheet & Payouts (Role-Protected)",
 )
-def vendor_settlement_sheet(db: Session = Depends(get_db)):
+def vendor_settlement_sheet(
+    vendor_id: Optional[int] = Query(None, description="Optional vendor ID filter"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_vendor_or_admin),
+):
     """
-    Returns auditable settlement ledger for all vendors with net sales, commissions, and payable balances.
-    Restricted to local administrative loopback interface.
+    Returns auditable settlement ledger for vendors with net sales, commissions, and payable balances.
+    - ADMIN: full visibility across all vendors, or filtered by vendor_id.
+    - VENDOR: strictly tenant-isolated to own vendor_id. Requests for other vendors fail with 403 Forbidden.
     """
-    return revenue_service.get_vendor_settlements(db)
+    if current_user.role == UserRole.VENDOR:
+        if vendor_id is not None and vendor_id != current_user.vendor_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access forbidden: You cannot view settlement data for another vendor.",
+            )
+        target_vendor_id = current_user.vendor_id
+    else:
+        target_vendor_id = vendor_id
+
+    return revenue_service.get_vendor_settlements(db, vendor_id=target_vendor_id)

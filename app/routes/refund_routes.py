@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.schemas.refund_schema import RefundCreate, RefundResponse
 from app.services import refund_service
-from app.core.security import verify_loopback_only
+from app.core.dependencies import require_admin
 
 router = APIRouter(prefix="/refunds", tags=["Refunds & Returns"])
 
@@ -22,8 +22,8 @@ router = APIRouter(prefix="/refunds", tags=["Refunds & Returns"])
     "/",
     response_model=RefundResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="Process atomic refund (Loopback-Guarded)",
-    dependencies=[Depends(verify_loopback_only)],
+    summary="Process atomic refund (Admin Only)",
+    dependencies=[Depends(require_admin)],
 )
 def create_refund(payload: RefundCreate, db: Session = Depends(get_db)):
     """

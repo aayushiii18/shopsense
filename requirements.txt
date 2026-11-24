@@ -17,3 +17,5 @@ apscheduler
 reportlab
 openpyxl
 locust
+bcrypt
+pyjwt

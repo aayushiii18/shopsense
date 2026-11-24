@@ -15,6 +15,8 @@ from app.models.product import Product
 from app.models.vendor import Vendor
 from app.schemas.product_schema import ProductCreate, ProductUpdate, ProductResponse
 from app.services import vendor_service
+from app.core.dependencies import get_current_user, verify_vendor_tenant
+from app.models.user import User
 
 router = APIRouter(prefix="/products", tags=["Products"])
 
@@ -25,7 +27,11 @@ router = APIRouter(prefix="/products", tags=["Products"])
     status_code=status.HTTP_201_CREATED,
     summary="Register a new product",
 )
-def create_product(payload: ProductCreate, db: Session = Depends(get_db)):
+def create_product(
+    payload: ProductCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """
     Add a product to the catalog.
 
@@ -33,7 +39,9 @@ def create_product(payload: ProductCreate, db: Session = Depends(get_db)):
     - vendor must not be in an inactive/suspended/terminated state (returns 403).
     - price must be > 0.
     - cost_price is optional (nullable) for verified COGS accounting.
+    - enforces backend multi-tenant vendor isolation.
     """
+    verify_vendor_tenant(current_user, payload.vendor_id)
     vendor = db.query(Vendor).filter(Vendor.id == payload.vendor_id).first()
     if not vendor:
         raise HTTPException(
@@ -100,7 +108,12 @@ def get_product(product_id: int, db: Session = Depends(get_db)):
     response_model=ProductResponse,
     summary="Update product details",
 )
-def update_product(product_id: int, payload: ProductUpdate, db: Session = Depends(get_db)):
+def update_product(
+    product_id: int,
+    payload: ProductUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """Update an existing product's name, price, cost_price, description, category, or vendor."""
     product = db.query(Product).filter(Product.id == product_id).first()
     if not product:
@@ -108,7 +121,9 @@ def update_product(product_id: int, payload: ProductUpdate, db: Session = Depend
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Product with id={product_id} not found.",
         )
+    verify_vendor_tenant(current_user, product.vendor_id)
     if payload.vendor_id is not None:
+        verify_vendor_tenant(current_user, payload.vendor_id)
         vendor = db.query(Vendor).filter(Vendor.id == payload.vendor_id).first()
         if not vendor:
             raise HTTPException(

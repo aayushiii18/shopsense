@@ -23,7 +23,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File,
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.core.security import verify_loopback_only
+from app.core.dependencies import require_admin
 from app.schemas.etl_schema import (
     ETLBatchResponse,
     ETLBatchListResponse,
@@ -47,7 +47,7 @@ router = APIRouter(prefix="/etl", tags=["ETL & Data Warehouse"])
     response_model=ETLBatchResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Upload CSV for bulk ingestion (Loopback-Guarded)",
-    dependencies=[Depends(verify_loopback_only)],
+    dependencies=[Depends(require_admin)],
 )
 async def upload_csv_batch(
     file: UploadFile = File(...),
@@ -240,7 +240,7 @@ def get_quarantine_endpoint(record_id: int, db: Session = Depends(get_db)):
 @router.post(
     "/quarantine/{record_id}/reprocess",
     summary="Reprocess single quarantine record (Loopback-Guarded)",
-    dependencies=[Depends(verify_loopback_only)],
+    dependencies=[Depends(require_admin)],
 )
 def reprocess_quarantine_endpoint(
     record_id: int,
@@ -264,7 +264,7 @@ def reprocess_quarantine_endpoint(
 @router.post(
     "/batches/{batch_id}/reprocess",
     summary="Reprocess all pending quarantine records for batch (Loopback-Guarded)",
-    dependencies=[Depends(verify_loopback_only)],
+    dependencies=[Depends(require_admin)],
 )
 def reprocess_batch_quarantine_endpoint(batch_id: str, db: Session = Depends(get_db)):
     """Retries all pending quarantined records for an entire batch."""
@@ -279,7 +279,7 @@ def reprocess_batch_quarantine_endpoint(batch_id: str, db: Session = Depends(get
 @router.post(
     "/marts/daily-sales/refresh",
     summary="Refresh Daily Sales Mart (Loopback-Guarded)",
-    dependencies=[Depends(verify_loopback_only)],
+    dependencies=[Depends(require_admin)],
 )
 def refresh_daily_mart_endpoint(
     payload: Optional[DailySalesMartRefreshRequest] = None,

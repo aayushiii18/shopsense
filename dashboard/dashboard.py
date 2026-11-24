@@ -78,10 +78,21 @@ def fetch_report_bytes(kind: str) -> bytes:
         return b""
 
 
+def _auth_headers() -> dict:
+    """Returns Bearer authorization header if an auth_token exists in session state."""
+    try:
+        token = st.session_state.get("auth_token")
+        if token:
+            return {"Authorization": f"Bearer {token}"}
+    except Exception:
+        pass
+    return {}
+
+
 def api_get(path: str, timeout: float = 1.0):
     """Safe GET helper returning JSON or None on failure."""
     try:
-        resp = requests.get(f"{API_BASE}{path}", timeout=timeout)
+        resp = requests.get(f"{API_BASE}{path}", headers=_auth_headers(), timeout=timeout)
         resp.raise_for_status()
         return resp.json()
     except Exception:
@@ -91,7 +102,7 @@ def api_get(path: str, timeout: float = 1.0):
 def api_post(path: str, payload: dict, timeout: int = 8):
     """Safe POST helper returning (response_json, error_message)."""
     try:
-        resp = requests.post(f"{API_BASE}{path}", json=payload, timeout=timeout)
+        resp = requests.post(f"{API_BASE}{path}", json=payload, headers=_auth_headers(), timeout=timeout)
         if resp.status_code in [200, 201]:
             return resp.json(), None
         error_detail = resp.json().get("detail", resp.text)
@@ -103,7 +114,7 @@ def api_post(path: str, payload: dict, timeout: int = 8):
 def api_put(path: str, payload: dict, timeout: int = 8):
     """Safe PUT helper returning (response_json, error_message)."""
     try:
-        resp = requests.put(f"{API_BASE}{path}", json=payload, timeout=timeout)
+        resp = requests.put(f"{API_BASE}{path}", json=payload, headers=_auth_headers(), timeout=timeout)
         if resp.status_code in [200, 201]:
             return resp.json(), None
         error_detail = resp.json().get("detail", resp.text)
@@ -225,8 +236,107 @@ with st.sidebar:
     st.markdown("##### *Smarter Stock. Better Decisions.*")
     st.markdown("---")
 
-    # Navigation Menu
-    NAV_OPTIONS = [
+    # ── Authentication & User Session ─────────────────────────────────────────
+    if "auth_token" not in st.session_state:
+        st.session_state["auth_token"] = None
+    if "auth_user" not in st.session_state:
+        st.session_state["auth_user"] = None
+
+    auth_user = st.session_state.get("auth_user")
+    if auth_user:
+        role = auth_user.get("role", "CUSTOMER")
+        role_emoji = {"ADMIN": "👑", "VENDOR": "🏢", "CUSTOMER": "👤"}.get(role, "👤")
+        st.markdown(f"**{role_emoji} Logged in as:**")
+        st.caption(f"`{auth_user.get('email')}` ({role})")
+        if role == "VENDOR" and auth_user.get("vendor_id"):
+            st.caption(f"Vendor ID: `{auth_user.get('vendor_id')}`")
+        elif role == "CUSTOMER" and auth_user.get("customer_id"):
+            st.caption(f"Customer ID: `{auth_user.get('customer_id')}`")
+
+        if st.button("🚪 Log Out", use_container_width=True, key="auth_logout_btn"):
+            token = st.session_state.get("auth_token")
+            if token:
+                api_post("/auth/logout", {"refresh_token": token})
+            st.session_state["auth_token"] = None
+            st.session_state["auth_user"] = None
+            st.rerun()
+    else:
+        with st.expander("🔐 Sign In / Register", expanded=False):
+            auth_tab_login, auth_tab_reg = st.tabs(["Sign In", "Register"])
+            with auth_tab_login:
+                with st.form("sidebar_login_form"):
+                    login_email = st.text_input("Email", placeholder="user@shopsense.com")
+                    login_pass = st.text_input("Password", type="password")
+                    login_submitted = st.form_submit_button("Sign In", use_container_width=True)
+                    if login_submitted:
+                        if not login_email or not login_pass:
+                            st.error("Please enter email and password.")
+                        else:
+                            resp, err = api_post("/auth/login", {"email": login_email, "password": login_pass})
+                            if resp and "access_token" in resp:
+                                st.session_state["auth_token"] = resp["access_token"]
+                                st.session_state["auth_user"] = {
+                                    "id": resp["user_id"],
+                                    "email": resp["email"],
+                                    "role": resp["role"],
+                                    "vendor_id": resp.get("vendor_id"),
+                                    "customer_id": resp.get("customer_id"),
+                                }
+                                st.success("Signed in successfully!")
+                                st.rerun()
+                            else:
+                                try:
+                                    from app.database import SessionLocal
+                                    from app.services.auth.auth_service import AuthService
+                                    fallback_db = SessionLocal()
+                                    try:
+                                        user_obj = AuthService.authenticate_user(fallback_db, login_email, login_pass)
+                                        tokens = AuthService.issue_token_pair(fallback_db, user_obj)
+                                        st.session_state["auth_token"] = tokens.access_token
+                                        st.session_state["auth_user"] = {
+                                            "id": user_obj.id,
+                                            "email": user_obj.email,
+                                            "role": user_obj.role,
+                                            "vendor_id": user_obj.vendor_id,
+                                            "customer_id": user_obj.customer_id,
+                                        }
+                                        st.success("Signed in successfully!")
+                                        st.rerun()
+                                    finally:
+                                        fallback_db.close()
+                                except Exception as fallback_err:
+                                    st.error(f"Sign-in failed: {err or str(fallback_err)}")
+
+            with auth_tab_reg:
+                with st.form("sidebar_register_form"):
+                    reg_email = st.text_input("Email", placeholder="shopper@example.com", key="reg_email")
+                    reg_pass = st.text_input("Password (min 8 chars)", type="password", key="reg_pass")
+                    reg_submitted = st.form_submit_button("Create Customer Account", use_container_width=True)
+                    if reg_submitted:
+                        if not reg_email or len(reg_pass) < 8:
+                            st.error("Valid email and password (min 8 characters) required.")
+                        else:
+                            resp, err = api_post("/auth/register", {"email": reg_email, "password": reg_pass})
+                            if resp and "id" in resp:
+                                st.success("Account created! Please sign in.")
+                            else:
+                                try:
+                                    from app.database import SessionLocal
+                                    from app.services.auth.auth_service import AuthService
+                                    from app.schemas.auth_schema import UserRegisterRequest
+                                    fallback_db = SessionLocal()
+                                    try:
+                                        AuthService.register_customer(fallback_db, UserRegisterRequest(email=reg_email, password=reg_pass))
+                                        st.success("Account created! Please sign in.")
+                                    finally:
+                                        fallback_db.close()
+                                except Exception as fallback_err:
+                                    st.error(f"Registration failed: {err or str(fallback_err)}")
+
+    st.markdown("---")
+
+    # Navigation Menu with Role-Based Access Control
+    ALL_NAV_OPTIONS = [
         "📊 Dashboard",
         "🏢 Vendor Management",
         "📦 Product Management",
@@ -238,6 +348,25 @@ with st.sidebar:
         "🛍️ Customer Catalog",
         "⚡ ETL & Data Warehouse",
     ]
+
+    current_role = auth_user.get("role") if auth_user else None
+    if current_role == "VENDOR":
+        NAV_OPTIONS = [
+            "📊 Dashboard",
+            "🏢 Vendor Management",
+            "📦 Product Management",
+            "📋 Inventory Management",
+            "💳 Transactions",
+            "🛍️ Customer Catalog",
+        ]
+    elif current_role == "CUSTOMER":
+        NAV_OPTIONS = [
+            "🛍️ Customer Catalog",
+            "🎯 Recommendations",
+            "💳 Transactions",
+        ]
+    else:
+        NAV_OPTIONS = ALL_NAV_OPTIONS
 
     selected_page = st.radio(
         "Navigation",

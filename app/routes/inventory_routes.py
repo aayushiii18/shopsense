@@ -16,6 +16,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.models.product import Product
+from app.models.user import User, UserRole
+from app.core.dependencies import get_current_user, verify_vendor_tenant
 from app.schemas.inventory_schema import StockMovementCreate
 from app.services import inventory_service
 
@@ -43,11 +46,21 @@ def list_movements(
 
 
 @movement_router.post("/movements", summary="Record a Stock Movement", status_code=status.HTTP_201_CREATED)
-def create_movement(payload: StockMovementCreate, db: Session = Depends(get_db)):
+def create_movement(
+    payload: StockMovementCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """
     Records an inventory stock movement (RESTOCK, SALE, ADJUSTMENT, TRANSFER, RETURN)
     and updates the active product inventory accordingly.
+    Enforces tenant isolation for VENDOR users.
     """
+    if current_user.role == UserRole.VENDOR:
+        prod = db.query(Product).filter(Product.id == payload.product_id).first()
+        if prod:
+            verify_vendor_tenant(current_user, prod.vendor_id)
+
     try:
         movement = inventory_service.record_stock_movement(
             db,

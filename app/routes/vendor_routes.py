@@ -22,7 +22,8 @@ from app.schemas.vendor_schema import (
     VALID_COMMISSION_TIERS,
 )
 from app.services import vendor_service
-from app.core.security import verify_loopback_only
+from app.core.dependencies import require_admin, require_vendor_or_admin, verify_vendor_tenant, get_current_user
+from app.models.user import User
 
 router = APIRouter(prefix="/vendors", tags=["Vendors"])
 
@@ -114,8 +115,14 @@ def get_vendor(vendor_id: int, db: Session = Depends(get_db)):
     response_model=VendorResponse,
     summary="Update vendor details",
 )
-def update_vendor(vendor_id: int, payload: VendorUpdate, db: Session = Depends(get_db)):
+def update_vendor(
+    vendor_id: int,
+    payload: VendorUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """Update an existing vendor record contact details."""
+    verify_vendor_tenant(current_user, vendor_id)
     vendor = db.query(Vendor).filter(Vendor.id == vendor_id).first()
     if not vendor:
         raise HTTPException(
@@ -149,8 +156,8 @@ def update_vendor(vendor_id: int, payload: VendorUpdate, db: Session = Depends(g
 @router.put(
     "/{vendor_id}/status",
     response_model=VendorResponse,
-    summary="Transition vendor lifecycle state (Loopback-Guarded)",
-    dependencies=[Depends(verify_loopback_only)],
+    summary="Transition vendor lifecycle state (Admin Only)",
+    dependencies=[Depends(require_admin)],
 )
 def update_vendor_status(
     vendor_id: int,

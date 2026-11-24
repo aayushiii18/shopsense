@@ -21,6 +21,8 @@ from app.schemas.recommendation_schema import (
     HybridRecommendationResponse,
     RecommendationEvaluationResponse,
 )
+from app.core.dependencies import get_current_user, verify_customer_tenant
+from app.models.user import User
 
 router = APIRouter(prefix="/recommendations", tags=["Recommendation Engine"])
 recommend_router = APIRouter(tags=["Recommendation Engine"])
@@ -74,11 +76,14 @@ def get_customer_recommendations(
     top_n: int = Query(5, ge=1, le=20, description="Number of recommendations to return"),
     exclude_purchased: bool = Query(True, description="Filter out products already interacted with"),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Returns personalized product recommendations for a customer using
     Item-Based Collaborative Filtering. Falls back gracefully to top sellers.
+    Enforces customer ownership verification.
     """
+    verify_customer_tenant(current_user, customer_id)
     try:
         return recommendation_service.get_personalized_recommendations(
             db, customer_id=customer_id, top_n=top_n, exclude_purchased=exclude_purchased
@@ -140,11 +145,14 @@ def get_hybrid_recommendations(
     alpha: float = Query(0.6, ge=0.0, le=1.0, description="Collaborative Filtering weight (0=Content, 1=CF)"),
     exclude_interacted: bool = Query(True, description="Exclude items customer has already bought or viewed"),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Generates personalized recommendations combining Item-Based Collaborative Filtering
     and TF-IDF Content-Based filtering, with strictly verified stock availability.
+    Enforces customer ownership verification.
     """
+    verify_customer_tenant(current_user, customer_id)
     try:
         return hybrid_recommender.get_hybrid_recommendations(
             db,

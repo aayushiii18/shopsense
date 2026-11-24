@@ -1,6 +1,6 @@
 # ShopSense / StockPilot — Multi-Vendor Retail Management, Analytics & Data Warehouse Platform
 > **Smarter Stock. Better Decisions.**  
-> *Infosys Springboard Internship Project — Stages 1 through 6 Complete*
+> *Infosys Springboard Internship Project — Stages 1 through 7 Complete*
 
 ---
 
@@ -12,6 +12,7 @@
 - **Advanced Commerce & Financial Operations (Stage 4):** Commission tiers with transaction-time rate snapshotting, nullable Cost of Goods Sold (COGS) reporting with explicit coverage disclosure, atomic refunds with idempotency, and vendor settlement ledgers.
 - **Customer Retention & Intelligence Engine (Stage 5):** Temporal churn prediction, cohort retention matrices, customer lifetime value (CLV), item-based collaborative filtering, catalog taxonomy normalization, and promotion safety stock validation.
 - **Structured ETL, Bulk Ingestion & Data Warehouse (Stage 6):** Chunked CSV data ingestion, staging buffer, row-level validation, database-enforced deduplication, quarantine triage and reprocessing, automated reconciliation, and dimensional data marts with scheduled refresh.
+- **Authentication, JWT Security & Multi-Tenant RBAC (Stage 7):** Bcrypt credential hashing, JWT access and refresh token lifecycle, refresh token family rotation with reuse detection, public customer registration with role escalation protection, backend-enforced multi-tenant vendor isolation, customer data privacy, administrative bootstrap CLI, and authentication-aware Streamlit navigation.
 
 ---
 
@@ -103,10 +104,39 @@ The ingestion pipeline strictly enforces clean stage separation:
 
 ---
 
-## 4. Database Schema Additions (Stage 6)
+## 4. Stage 7: Authentication, JWT Security, RBAC & Multi-Tenant Access Control
+
+### A. Security Architecture & Specifications
+1. **Cryptographic Protection (`app/core/security.py`):**
+   - **Password Hashing:** Bcrypt work factor 12 with automatic per-user salt generation.
+   - **Token Signing:** HMAC-SHA256 (`HS256`) cryptographically signed JWTs using high-entropy secret key.
+   - **Token Hashing:** SHA-256 digests stored in the database for refresh tokens (zero plaintext token storage).
+
+2. **JWT Lifecycle & Token Family Rotation:**
+   - **Access Tokens:** Short-lived (30 minutes), carrying claims: `sub` (user_id), `email`, `role`, `vendor_id`, `customer_id`, `type="access"`, `iat`, `exp`, `jti`.
+   - **Refresh Tokens:** Long-lived (7 days), carrying claims: `sub`, `email`, `role`, `family` (UUID), `type="refresh"`, `jti`.
+   - **Rotation & Reuse Detection:** Presenting a valid refresh token rotates it and issues a successor within the same `family`. If an already-rotated (revoked) token is presented (replay attack), the system immediately detects reuse and revokes **all** active tokens in that `family`.
+
+3. **Role-Based Access Control (RBAC):**
+   - `ADMIN`: Global oversight, user provisioning, role assignments, financial approvals (`/refunds/`, `/vendors/{id}/status`), ETL operations.
+   - `VENDOR`: Strictly scoped to vendor's own catalog (`/products/`), inventory stock movements (`/inventory/movements`), and settlement payouts (`/analytics/vendors/payouts`). Cross-vendor operations return `HTTP 403 Forbidden`.
+   - `CUSTOMER`: Personal profile management, customer-specific recommendations (`/recommendations/customer/{id}`), and order history. Cross-customer inquiries return `HTTP 403 Forbidden`.
+
+4. **Public Self-Service Registration:**
+   - Public registration (`POST /auth/register`) strictly assigns the `CUSTOMER` role. Role escalation attempts in the request payload are rejected. Automatically links existing shopper profile by email or verified customer ID.
+
+5. **Administrative Bootstrap CLI (`bootstrap_admin.py`):**
+   - Idempotent tool to initialize the root platform administrator (`python bootstrap_admin.py --email admin@shopsense.com --password <password>`).
+   - Supports interactive hidden password prompts, CLI flags, or environment variables. Never logs plaintext credentials.
+
+---
+
+## 5. Database Schema Additions (Stages 6 & 7)
 
 | Table Name | Primary Key | Key Foreign Keys & Constraints | Description |
 | :--- | :--- | :--- | :--- |
+| `users` | `id` (SERIAL) | `UNIQUE(email)`, `role IN ('ADMIN', 'VENDOR', 'CUSTOMER')`, `FK -> vendors`, `FK -> customers` | Platform identity, hashed passwords, roles, and entity links. |
+| `refresh_tokens` | `id` (SERIAL) | `UNIQUE(token_hash)`, `UNIQUE(jti)`, `FK -> users(id) ON DELETE CASCADE` | Refresh token hash storage, token families, and revocation audit. |
 | `etl_batches` | `batch_id` (VARCHAR 50) | Status: `RECEIVED`, `PROCESSING`, `COMPLETED`, `PARTIALLY_COMPLETED`, `FAILED` | Ingestion batch lifecycle and audit summary. |
 | `etl_staging_records` | `staging_id` (SERIAL) | `FK -> etl_batches(batch_id)`, `FK -> transactions(transaction_id)` | Staging buffer preserving raw CSV payloads. |
 | `etl_quarantine_records` | `quarantine_id` (SERIAL) | `FK -> etl_batches(batch_id)`, `FK -> etl_staging_records(staging_id)` | Quarantined invalid rows with resolution status. |
@@ -115,10 +145,11 @@ The ingestion pipeline strictly enforces clean stage separation:
 
 ---
 
-## 5. Technology Stack
+## 6. Technology Stack
 
 - **Language:** Python 3.10+
 - **Backend API:** FastAPI 0.111+ / Uvicorn (ASGI) / Pydantic 2.x
+- **Authentication & Security:** `bcrypt` 5.0+ / `pyjwt` 2.15+ / `cryptography`
 - **Database & Warehouse:** PostgreSQL 16 / SQLAlchemy 2.0 / `psycopg2-binary`
 - **Data Analytics & ML:** Scikit-Learn 1.7+, Pandas 2.2+, NumPy
 - **Experiment Tracking:** MLflow 2.x
@@ -128,7 +159,7 @@ The ingestion pipeline strictly enforces clean stage separation:
 
 ---
 
-## 6. Directory Structure
+## 7. Directory Structure
 
 ```text
 Retail Management Platform for Inventory Control and Sales Analytics/
@@ -256,22 +287,22 @@ Open `http://localhost:8501` to access all 10 dashboard views.
 
 ---
 
-## 8. API Reference (Stage 6 Additions)
+## 8. API Reference (Stage 7 Additions)
 
 | Method | Endpoint | Description | Guard / Security |
 | :--- | :--- | :--- | :--- |
-| `POST` | `/etl/batches/upload` | Upload CSV for streaming chunked ingestion | Loopback-Guarded |
-| `GET` | `/etl/batches` | List paginated ingestion batches with status filters | Public |
-| `GET` | `/etl/batches/{batch_id}` | Retrieve batch status, counters, and error summaries | Public |
-| `GET` | `/etl/batches/{batch_id}/records` | List raw/staged records for a specific batch | Public |
-| `GET` | `/etl/batches/{batch_id}/reconciliation` | Retrieve structured count & monetary reconciliation | Public |
-| `GET` | `/etl/quarantine` | List quarantined records with status/category filters | Public |
-| `GET` | `/etl/quarantine/{record_id}` | Retrieve single quarantined record detail | Public |
-| `POST` | `/etl/quarantine/{record_id}/reprocess` | Submit manual corrections and reprocess record | Loopback-Guarded |
-| `POST` | `/etl/batches/{batch_id}/reprocess` | Reprocess all pending quarantine records for batch | Loopback-Guarded |
-| `POST` | `/etl/marts/daily-sales/refresh` | Trigger incremental or full Daily Sales Mart refresh | Loopback-Guarded |
-| `GET` | `/etl/marts/daily-sales` | Query aggregated daily sales mart by dimensions | Public |
-| `GET` | `/etl/quality-report` | Platform-wide data quality & reconciliation score | Public |
+| `POST` | `/auth/register` | Public self-service customer registration | Public (CUSTOMER role enforced) |
+| `POST` | `/auth/login` | Authenticate user credentials & issue JWT token pair | Public (Generic 401 on error) |
+| `POST` | `/auth/refresh` | Rotate refresh token with reuse attack detection | Bearer Refresh Token |
+| `GET` | `/auth/me` | Retrieve profile of authenticated user | Authenticated (Any Role) |
+| `POST` | `/auth/logout` | Revoke current refresh token session | Authenticated (Any Role) |
+| `POST` | `/auth/logout-all` | Revoke all active sessions across all devices | Authenticated (Any Role) |
+| `POST` | `/auth/change-password` | Update user password and terminate old sessions | Authenticated (Any Role) |
+| `POST` | `/auth/admin/users` | Admin provision new user (ADMIN, VENDOR, CUSTOMER) | ADMIN Only |
+| `GET` | `/auth/admin/users` | Admin list system users with role filters | ADMIN Only |
+| `GET` | `/auth/admin/users/{id}` | Admin fetch single user details | ADMIN Only |
+| `PATCH` | `/auth/admin/users/{id}/status` | Admin activate/deactivate user | ADMIN Only |
+| `PATCH` | `/auth/admin/users/{id}/role` | Admin change role and entity linkage | ADMIN Only |
 
 ---
 
@@ -279,10 +310,10 @@ Open `http://localhost:8501` to access all 10 dashboard views.
 
 ### Running Tests
 ```powershell
-# Run dedicated Stage 6 test suite (20 scenarios)
-pytest tests/test_stage6_etl.py -v
+# Run dedicated Stage 7 security test suite (37 scenarios)
+pytest tests/test_stage7_auth_security.py -v
 
-# Run full repository regression suite (175 tests)
+# Run full repository regression suite (212 tests)
 pytest tests/ -q
 
 # Run platform consistency validation (12 assertions)
@@ -290,8 +321,9 @@ python validate_consistency.py
 ```
 
 ### Test Suite Summary
+- **Stage 7 Dedicated Suite:** **37 / 37 passed (100%)**
 - **Stage 6 Dedicated Suite:** **20 / 20 passed (100%)**
-- **Full Repository Suite:** **175 / 175 passed (100%)**
+- **Full Repository Suite:** **212 / 212 passed (100%)**
 - **Consistency Verification:** **12 / 12 passed (100.0% Consistency Score)**
 - **Streamlit AppTest:** **10 / 10 views passed (0 exceptions)**
 
@@ -300,6 +332,7 @@ python validate_consistency.py
 ## 10. Historical Data Integrity & Invariants
 
 PostgreSQL database verification confirms zero data loss and zero synthetic data fabrication:
+- **Users:** 1 root administrator bootstrap account; zero fabricated passwords for legacy entities.
 - **Vendors:** 5 (unchanged)
 - **Products:** 10 (unchanged; legacy products strictly retain `NULL` cost_price)
 - **Customers:** 60 (unchanged)

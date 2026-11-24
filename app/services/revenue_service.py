@@ -470,9 +470,9 @@ def get_revenue_by_region(db: Session) -> Dict[str, Any]:
     return res
 
 
-def get_vendor_settlements(db: Session) -> Dict[str, Any]:
+def get_vendor_settlements(db: Session, vendor_id: Optional[int] = None) -> Dict[str, Any]:
     """
-    Computes auditable settlement sheet for all vendors:
+    Computes auditable settlement sheet for vendors (or a specific vendor):
       Gross Sales = sum(vendor's transaction amounts)
       Discounts = sum(vendor's transaction discounts)
       Refunds = sum(refunds for vendor's transactions)
@@ -480,11 +480,15 @@ def get_vendor_settlements(db: Session) -> Dict[str, Any]:
       Commission = Net Sales * vendor.commission_rate
       Vendor Payout = Net Sales - Commission
     """
-    cached = _get_cached_rev("settlements", 15.0)
+    cache_key = f"settlements_vendor_{vendor_id}" if vendor_id else "settlements"
+    cached = _get_cached_rev(cache_key, 15.0)
     if cached is not None:
         return cached
 
-    vendors = db.query(Vendor).all()
+    query = db.query(Vendor)
+    if vendor_id is not None:
+        query = query.filter(Vendor.id == vendor_id)
+    vendors = query.all()
     settlement_items = []
 
     total_net = 0.0
@@ -535,5 +539,5 @@ def get_vendor_settlements(db: Session) -> Dict[str, Any]:
         "total_vendor_payouts": round(total_payout, 2),
         "settlements": settlement_items,
     }
-    _set_cached_rev("settlements", res)
+    _set_cached_rev(cache_key, res)
     return res

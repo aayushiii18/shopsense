@@ -10,6 +10,7 @@ from app.models.workflow_audit import WorkflowAuditLog
 from app.models.refund import Refund
 from app.models.vendor_settlement import VendorSettlement
 from app.models.etl import ETLBatch, ETLStagingRecord, ETLQuarantineRecord, DailySalesMart
+from app.models.user import User, RefreshToken, UserRole
 
 __all__ = [
     "Vendor",
@@ -26,4 +27,7 @@ __all__ = [
     "ETLStagingRecord",
     "ETLQuarantineRecord",
     "DailySalesMart",
+    "User",
+    "RefreshToken",
+    "UserRole",
 ]
