@@ -38,7 +38,11 @@ from app.schemas.etl_schema import (
 )
 from app.services import etl as etl_service
 
-router = APIRouter(prefix="/etl", tags=["ETL & Data Warehouse"])
+router = APIRouter(
+    prefix="/etl",
+    tags=["ETL & Data Warehouse"],
+    dependencies=[Depends(require_admin)],
+)
 
 
 # ── 1. Batch Upload & Ingestion ───────────────────────────────────────────────

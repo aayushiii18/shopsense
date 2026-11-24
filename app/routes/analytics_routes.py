@@ -17,6 +17,8 @@ from app.database import get_db
 from app.models.transaction import Transaction
 from app.models.vendor import Vendor
 from app.models.product import Product
+from app.models.user import User, UserRole
+from app.core.dependencies import get_current_user
 
 router = APIRouter(prefix="/analytics", tags=["Analytics"])
 
@@ -203,9 +205,13 @@ def analytics_summary(db: Session = Depends(get_db)):
 
 
 @router.get("/transactions", summary="List transactions with joined product and vendor details")
-def list_transactions(limit: int = 200, db: Session = Depends(get_db)):
-    """Return recent transaction records with join details for admin inspection."""
-    rows = (
+def list_transactions(
+    limit: int = 200,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Return recent transaction records with join details, tenant-filtered by caller role."""
+    query = (
         db.query(
             Transaction.transaction_id,
             Transaction.product_id,
@@ -223,7 +229,15 @@ def list_transactions(limit: int = 200, db: Session = Depends(get_db)):
         )
         .join(Product, Transaction.product_id == Product.id)
         .join(Vendor, Transaction.vendor_id == Vendor.id)
-        .order_by(Transaction.transaction_date.desc())
+    )
+
+    if current_user.role == UserRole.VENDOR:
+        query = query.filter(Transaction.vendor_id == current_user.vendor_id)
+    elif current_user.role == UserRole.CUSTOMER:
+        query = query.filter(Transaction.customer_id == current_user.customer_id)
+
+    rows = (
+        query.order_by(Transaction.transaction_date.desc())
         .limit(limit)
         .all()
     )

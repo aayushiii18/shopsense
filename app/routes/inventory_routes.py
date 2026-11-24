@@ -56,10 +56,21 @@ def create_movement(
     and updates the active product inventory accordingly.
     Enforces tenant isolation for VENDOR users.
     """
+    if current_user.role not in (UserRole.ADMIN, UserRole.VENDOR):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Vendor or Administrative privileges required to record stock movements.",
+        )
+
     if current_user.role == UserRole.VENDOR:
         prod = db.query(Product).filter(Product.id == payload.product_id).first()
         if prod:
             verify_vendor_tenant(current_user, prod.vendor_id)
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Product with id={payload.product_id} not found.",
+            )
 
     try:
         movement = inventory_service.record_stock_movement(

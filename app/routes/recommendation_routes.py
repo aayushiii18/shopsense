@@ -33,12 +33,18 @@ recommend_router = APIRouter(tags=["Recommendation Engine"])
     response_model=SingleRecommendationResponse,
     summary="Top Recommended Product for Customer",
 )
-def recommend(customer_id: int, db: Session = Depends(get_db)):
+def recommend(
+    customer_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """
     Returns the customer's dynamically generated recommended product
     using Item-Based Collaborative Filtering (with popularity fallback).
+    Enforces customer data ownership verification.
     Returns 404 if customer is not found.
     """
+    verify_customer_tenant(current_user, customer_id)
     try:
         res = recommendation_service.get_personalized_recommendations(
             db, customer_id=customer_id, top_n=1, exclude_purchased=False

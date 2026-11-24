@@ -34,6 +34,22 @@ logger = logging.getLogger(__name__)
 
 LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost", "testclient"}
 
+# In-memory revocation cache for active access tokens (checked on every authenticated request)
+_REVOKED_ACCESS_JTIS: set = set()
+
+
+def revoke_access_jti(jti: str) -> None:
+    """Revoke an individual access token by its JTI."""
+    if jti:
+        _REVOKED_ACCESS_JTIS.add(str(jti))
+
+
+def is_access_jti_revoked(jti: str) -> bool:
+    """Check if an access token JTI has been revoked."""
+    if not jti:
+        return False
+    return str(jti) in _REVOKED_ACCESS_JTIS
+
 
 # ── Password Hashing & Verification ──────────────────────────────────────────
 
@@ -79,11 +95,12 @@ def create_access_token(
     role: str,
     vendor_id: Optional[int] = None,
     customer_id: Optional[int] = None,
+    token_version: int = 1,
     expires_delta: Optional[timedelta] = None,
 ) -> str:
     """
     Create a signed JWT access token.
-    Claims: sub (user_id), email, role, vendor_id, customer_id, type="access", jti, iat, exp.
+    Claims: sub (user_id), email, role, vendor_id, customer_id, token_version, type="access", jti, iat, exp.
     """
     now = datetime.now(timezone.utc)
     expire = now + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
@@ -95,6 +112,7 @@ def create_access_token(
         "role": role.upper(),
         "vendor_id": vendor_id,
         "customer_id": customer_id,
+        "token_version": token_version,
         "type": "access",
         "iat": int(now.timestamp()),
         "exp": int(expire.timestamp()),
@@ -163,6 +181,14 @@ def decode_token(token: str, expected_type: Optional[str] = None) -> Dict[str, A
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Invalid token type. Expected '{expected_type}' token.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    jti = payload.get("jti")
+    if jti and is_access_jti_revoked(jti):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token has been revoked. Please re-authenticate.",
             headers={"WWW-Authenticate": "Bearer"},
         )
 

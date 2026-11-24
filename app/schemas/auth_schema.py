@@ -6,7 +6,7 @@ Stage 7: Authentication, JWT Security, RBAC & Multi-Tenant Access Control.
 
 from datetime import datetime
 from typing import Optional, List
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator, ConfigDict
 
 
 class UserRegisterRequest(BaseModel):
@@ -112,8 +112,7 @@ class UserResponse(BaseModel):
     created_at: datetime
     last_login_at: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class MessageResponse(BaseModel):

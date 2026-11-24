@@ -5,7 +5,7 @@ Stage 7: Authentication, JWT Security, RBAC & Multi-Tenant Access Control.
 """
 
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Header
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -96,10 +96,20 @@ def get_current_user_profile(current_user: User = Depends(require_authenticated_
 def logout(
     payload: RefreshTokenRequest,
     current_user: User = Depends(require_authenticated_user),
+    authorization: Optional[str] = Header(None, alias="Authorization"),
     db: Session = Depends(get_db),
 ):
-    """Revoke a specific refresh token session."""
-    AuthService.revoke_refresh_token(db, payload.refresh_token)
+    """Revoke a specific refresh token session and blacklist the calling access token."""
+    access_jti = None
+    if authorization and authorization.startswith("Bearer "):
+        try:
+            from app.core.security import decode_token
+            decoded = decode_token(authorization[7:].strip())
+            access_jti = decoded.get("jti")
+        except Exception:
+            pass
+
+    AuthService.revoke_refresh_token(db, payload.refresh_token, access_token_jti=access_jti)
     return MessageResponse(message="Successfully logged out of current session.")
 
 

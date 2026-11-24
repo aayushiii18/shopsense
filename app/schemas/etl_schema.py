@@ -3,7 +3,7 @@ schemas/etl_schema.py — Pydantic models for ETL batches, staging, quarantine, 
 """
 
 from typing import List, Dict, Any, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 
 class ETLBatchResponse(BaseModel):
@@ -26,8 +26,7 @@ class ETLBatchResponse(BaseModel):
     started_at: Optional[str] = None
     completed_at: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ETLBatchListResponse(BaseModel):
@@ -48,8 +47,7 @@ class ETLStagingRecordResponse(BaseModel):
     target_transaction_id: Optional[int] = None
     created_at: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ETLStagingListResponse(BaseModel):
@@ -73,8 +71,7 @@ class ETLQuarantineRecordResponse(BaseModel):
     last_reprocessed_at: Optional[str] = None
     created_at: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ETLQuarantineListResponse(BaseModel):
@@ -105,8 +102,7 @@ class DailySalesMartRecordResponse(BaseModel):
     transaction_count: int
     last_refreshed_at: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class DailySalesMartQueryResponse(BaseModel):

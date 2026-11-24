@@ -18,6 +18,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.core.dependencies import get_current_user, verify_customer_tenant
+from app.models.user import User
 from app.services import (
     customer_service,
     revenue_service,
@@ -86,8 +88,13 @@ def customer_churn(db: Session = Depends(get_db)):
 
 
 @router.get("/churn/{customer_id}", response_model=SingleCustomerChurnResponse, summary="Single Customer Churn Risk")
-def single_customer_churn(customer_id: int, db: Session = Depends(get_db)):
+def single_customer_churn(
+    customer_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """Returns individual churn prediction and top risk drivers for a specific customer."""
+    verify_customer_tenant(current_user, customer_id)
     res = churn_service.get_single_customer_churn(db, customer_id=customer_id)
     if not res:
         raise HTTPException(status_code=404, detail=f"Customer {customer_id} not found")
@@ -112,8 +119,13 @@ def customer_clv(db: Session = Depends(get_db)):
 
 
 @router.get("/clv/{customer_id}", response_model=SingleCustomerCLVResponse, summary="Single Customer Predictive CLV")
-def single_customer_clv(customer_id: int, db: Session = Depends(get_db)):
+def single_customer_clv(
+    customer_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """Returns individual 12-month forward predictive CLV, historical spend, and tier."""
+    verify_customer_tenant(current_user, customer_id)
     res = clv_service.get_single_customer_clv(db, customer_id=customer_id)
     if not res:
         raise HTTPException(status_code=404, detail=f"Customer {customer_id} not found")

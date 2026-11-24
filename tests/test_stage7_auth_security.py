@@ -22,6 +22,7 @@ from app.models.user import User, RefreshToken, UserRole
 from app.models.vendor import Vendor
 from app.models.customer import Customer
 from app.models.product import Product
+from app.models.transaction import Transaction
 from app.core.security import (
     hash_password,
     verify_password,
@@ -66,6 +67,7 @@ def _auth_header(user: User) -> dict:
         role=user.role,
         vendor_id=user.vendor_id,
         customer_id=user.customer_id,
+        token_version=user.token_version or 1,
     )
     return {"Authorization": f"Bearer {token}", "X-Enforce-Auth": "true"}
 
@@ -585,3 +587,266 @@ def test_37_customer_cannot_access_another_customer_recommendations(client, db_s
     resp = client.get(f"/recommendations/customer/{c2.customer_id}", headers=headers)
     assert resp.status_code == 403
     assert "you cannot view or modify data belonging to another customer" in resp.json()["detail"].lower()
+
+
+# ── Category 8: Stage 7.1 Security Hardening & Session Revocation (Tests 38–46) ─
+
+def test_38_access_token_invalidated_after_single_logout(client, db_session):
+    """
+    Verify that logging out revokes both the refresh token and blacklists the
+    current access token JTI, immediately rejecting further use with HTTP 401.
+    """
+    user = _create_user(db_session, email="logout_test@test.com", role=UserRole.CUSTOMER)
+    tokens = AuthService.issue_token_pair(db_session, user)
+    access_token = tokens.access_token
+    refresh_token = tokens.refresh_token
+
+    auth_headers = {"Authorization": f"Bearer {access_token}", "X-Enforce-Auth": "true"}
+
+    # Verified access works initially
+    me_resp = client.get("/auth/me", headers=auth_headers)
+    assert me_resp.status_code == 200
+
+    # User logs out with access token header and refresh token body
+    logout_resp = client.post(
+        "/auth/logout",
+        json={"refresh_token": refresh_token},
+        headers=auth_headers,
+    )
+    assert logout_resp.status_code == 200
+
+    # Same access token is now blacklisted and must be rejected with 401
+    me_after = client.get("/auth/me", headers=auth_headers)
+    assert me_after.status_code == 401
+    assert "revoked" in me_after.json()["detail"].lower()
+
+
+def test_39_access_token_invalidated_after_logout_all(client, db_session):
+    """
+    Verify that calling logout-all bumps token_version and invalidates
+    active access tokens across all devices with HTTP 401.
+    """
+    user = _create_user(db_session, email="logout_all_test@test.com", role=UserRole.CUSTOMER)
+    tokens = AuthService.issue_token_pair(db_session, user)
+    access_token = tokens.access_token
+
+    auth_headers = {"Authorization": f"Bearer {access_token}", "X-Enforce-Auth": "true"}
+    assert client.get("/auth/me", headers=auth_headers).status_code == 200
+
+    # Call logout-all
+    resp = client.post("/auth/logout-all", headers=auth_headers)
+    assert resp.status_code == 200
+
+    # Old access token with outdated token_version must be rejected
+    resp_after = client.get("/auth/me", headers=auth_headers)
+    assert resp_after.status_code == 401
+    assert "session has been terminated" in resp_after.json()["detail"].lower()
+
+
+def test_40_access_token_invalidated_after_password_change(client, db_session):
+    """
+    Verify password change invalidates all pre-existing access tokens via token_version.
+    """
+    user = _create_user(db_session, email="pwd_change_inv@test.com", role=UserRole.CUSTOMER, password="OldPassword123!")
+    tokens = AuthService.issue_token_pair(db_session, user)
+    old_access_token = tokens.access_token
+
+    old_headers = {"Authorization": f"Bearer {old_access_token}", "X-Enforce-Auth": "true"}
+
+    # Change password
+    resp = client.post(
+        "/auth/change-password",
+        json={"current_password": "OldPassword123!", "new_password": "BrandNewPassword456!"},
+        headers=old_headers,
+    )
+    assert resp.status_code == 200
+
+    # Pre-existing access token is now invalid
+    resp_old = client.get("/auth/me", headers=old_headers)
+    assert resp_old.status_code == 401
+    assert "session has been terminated" in resp_old.json()["detail"].lower()
+
+
+def test_41_access_token_invalidated_after_admin_role_change(client, db_session):
+    """
+    Verify that when an admin modifies a user's role or tenant linkage,
+    the user's existing access token is immediately rejected due to token_version / role mismatch.
+    """
+    admin = _create_user(db_session, email="admin_role_changer@test.com", role=UserRole.ADMIN)
+    target_user = _create_user(db_session, email="target_emp@test.com", role=UserRole.CUSTOMER)
+
+    target_tokens = AuthService.issue_token_pair(db_session, target_user)
+    target_access_token = target_tokens.access_token
+    target_headers = {"Authorization": f"Bearer {target_access_token}", "X-Enforce-Auth": "true"}
+
+    assert client.get("/auth/me", headers=target_headers).status_code == 200
+
+    v = Vendor(name="Target Vendor", email="tv@test.com", phone="1234567890", status="ACTIVE", commission_tier="TIER_STANDARD")
+    db_session.add(v)
+    db_session.commit()
+    db_session.refresh(v)
+
+    # Admin changes user role from CUSTOMER to VENDOR
+    admin_headers = _auth_header(admin)
+    patch_resp = client.patch(
+        f"/auth/admin/users/{target_user.id}/role",
+        json={"role": "VENDOR", "vendor_id": v.id},
+        headers=admin_headers,
+    )
+    assert patch_resp.status_code == 200
+    assert patch_resp.json()["role"] == "VENDOR"
+
+    # Target user's pre-change token is now rejected
+    resp_after = client.get("/auth/me", headers=target_headers)
+    assert resp_after.status_code == 401
+
+
+def test_42_customer_registration_with_mismatched_customer_id_rejected(client, db_session):
+    """
+    Verify an attacker cannot claim a pre-existing customer profile
+    merely by submitting an arbitrary customer_id with a different email.
+    """
+    c = Customer(name="Real Customer", email="real_customer@test.com", city="Dallas", region="South")
+    db_session.add(c)
+    db_session.commit()
+    db_session.refresh(c)
+
+    # Attacker tries to register under attacker@evil.com with c.customer_id
+    payload = {
+        "email": "attacker@evil.com",
+        "password": "AttackerPass123!",
+        "customer_id": c.customer_id,
+    }
+    resp = client.post("/auth/register", json=payload)
+    assert resp.status_code == 403
+    assert "ownership verification failed" in resp.json()["detail"].lower()
+
+
+def test_43_customer_cannot_access_another_customer_churn_and_clv(client, db_session):
+    """
+    Verify customer cannot query churn risk or CLV projections of another customer.
+    """
+    c1 = Customer(name="Cust Alpha", email="calpha@test.com", city="Boston", region="East")
+    c2 = Customer(name="Cust Beta", email="cbeta@test.com", city="Chicago", region="Central")
+    db_session.add_all([c1, c2])
+    db_session.commit()
+    db_session.refresh(c1)
+    db_session.refresh(c2)
+
+    user1 = _create_user(db_session, email="calpha_user@test.com", role=UserRole.CUSTOMER, customer_id=c1.customer_id)
+    headers = _auth_header(user1)
+
+    # Cust 1 tries to access Cust 2 churn
+    resp_churn = client.get(f"/analytics/customers/churn/{c2.customer_id}", headers=headers)
+    assert resp_churn.status_code == 403
+    assert "cannot view or modify data belonging to another customer" in resp_churn.json()["detail"].lower()
+
+    # Cust 1 tries to access Cust 2 clv
+    resp_clv = client.get(f"/analytics/customers/clv/{c2.customer_id}", headers=headers)
+    assert resp_clv.status_code == 403
+    assert "cannot view or modify data belonging to another customer" in resp_clv.json()["detail"].lower()
+
+
+def test_44_vendor_transactions_strictly_filtered_by_vendor_id(client, db_session):
+    """
+    Verify GET /analytics/transactions returns only own transactions for VENDOR role.
+    """
+    v1 = Vendor(name="V1 Txn", email="v1_t@test.com", phone="1234567890", status="ACTIVE", commission_tier="TIER_STANDARD")
+    v2 = Vendor(name="V2 Txn", email="v2_t@test.com", phone="0987654321", status="ACTIVE", commission_tier="TIER_STANDARD")
+    db_session.add_all([v1, v2])
+    db_session.commit()
+    db_session.refresh(v1)
+    db_session.refresh(v2)
+
+    p1 = Product(name="P1", price=50.0, category="Test", vendor_id=v1.id)
+    p2 = Product(name="P2", price=60.0, category="Test", vendor_id=v2.id)
+    c = Customer(name="Cust Txn", email="c_t@test.com", city="City", region="Region")
+    db_session.add_all([p1, p2, c])
+    db_session.commit()
+    db_session.refresh(p1)
+    db_session.refresh(p2)
+    db_session.refresh(c)
+
+    t1 = Transaction(
+        transaction_id=9001,
+        product_id=p1.id,
+        vendor_id=v1.id,
+        customer_id=c.customer_id,
+        quantity=2,
+        unit_price=50.0,
+        amount=100.0,
+        transaction_date=datetime.utcnow(),
+    )
+    t2 = Transaction(
+        transaction_id=9002,
+        product_id=p2.id,
+        vendor_id=v2.id,
+        customer_id=c.customer_id,
+        quantity=1,
+        unit_price=60.0,
+        amount=60.0,
+        transaction_date=datetime.utcnow(),
+    )
+    db_session.add_all([t1, t2])
+    db_session.commit()
+
+    vendor1_user = _create_user(db_session, email="v1_user_txn@test.com", role=UserRole.VENDOR, vendor_id=v1.id)
+    headers = _auth_header(vendor1_user)
+
+    resp = client.get("/analytics/transactions", headers=headers)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) >= 1
+    # Ensure every transaction returned belongs strictly to v1
+    for item in data:
+        assert item["vendor_id"] == v1.id
+
+
+def test_45_customer_cannot_record_stock_movement(client, db_session):
+    """
+    Verify customer role cannot record inventory stock movements (403 Forbidden).
+    """
+    v = Vendor(name="V Stock", email="vstock@test.com", phone="1234567890", status="ACTIVE", commission_tier="TIER_STANDARD")
+    db_session.add(v)
+    db_session.commit()
+    db_session.refresh(v)
+
+    p = Product(name="Stock Item", price=30.0, category="Items", vendor_id=v.id)
+    c = Customer(name="Customer Stock", email="cstock@test.com", city="City", region="Region")
+    db_session.add_all([p, c])
+    db_session.commit()
+    db_session.refresh(p)
+    db_session.refresh(c)
+
+    cust_user = _create_user(db_session, email="cust_stock@test.com", role=UserRole.CUSTOMER, customer_id=c.customer_id)
+    headers = _auth_header(cust_user)
+
+    resp = client.post(
+        "/inventory/movements",
+        json={
+            "product_id": p.id,
+            "movement_type": "RESTOCK",
+            "quantity": 100,
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 403
+    assert "vendor or administrative privileges required" in resp.json()["detail"].lower()
+
+
+def test_46_non_admin_cannot_access_etl_endpoints(client, db_session):
+    """
+    Verify non-admin roles (VENDOR, CUSTOMER) cannot access ETL batch endpoints.
+    """
+    v = Vendor(name="V ETL", email="vetl@test.com", phone="1234567890", status="ACTIVE", commission_tier="TIER_STANDARD")
+    db_session.add(v)
+    db_session.commit()
+    db_session.refresh(v)
+
+    vendor_user = _create_user(db_session, email="vetl_user@test.com", role=UserRole.VENDOR, vendor_id=v.id)
+    headers = _auth_header(vendor_user)
+
+    resp = client.get("/etl/batches", headers=headers)
+    assert resp.status_code == 403
+    assert "administrative privileges required" in resp.json()["detail"].lower()
+

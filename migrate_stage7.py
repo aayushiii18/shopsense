@@ -48,6 +48,11 @@ def run_migration():
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_users_vendor_id ON users(vendor_id);"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_users_customer_id ON users(customer_id);"))
 
+            # Ensure token_version column exists for instantaneous token invalidation
+            conn.execute(text("""
+                ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version INTEGER NOT NULL DEFAULT 1;
+            """))
+
             # 2. Create refresh_tokens table
             print("Creating 'refresh_tokens' table (PostgreSQL)...")
             conn.execute(text("""
@@ -81,6 +86,7 @@ def run_migration():
                     customer_id INTEGER REFERENCES customers(customer_id) ON DELETE SET NULL,
                     is_active BOOLEAN NOT NULL DEFAULT 1,
                     is_verified BOOLEAN NOT NULL DEFAULT 0,
+                    token_version INTEGER NOT NULL DEFAULT 1,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
                     last_login_at TIMESTAMP

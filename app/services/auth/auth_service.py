@@ -26,6 +26,7 @@ from app.core.security import (
     create_access_token,
     create_refresh_token,
     decode_token,
+    revoke_access_jti,
 )
 from app.models.user import User, RefreshToken, UserRole
 from app.models.vendor import Vendor
@@ -71,6 +72,12 @@ class AuthService:
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Customer with ID {req.customer_id} does not exist.",
                 )
+            # CRITICAL SECURITY CHECK: Email must match target customer profile to prevent account theft
+            if cust.email.strip().lower() != email_clean:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Account ownership verification failed: Email address does not match target customer profile.",
+                )
             # Check customer not already linked to another user
             linked_user = db.query(User).filter(User.customer_id == req.customer_id).first()
             if linked_user:
@@ -79,13 +86,7 @@ class AuthService:
                     detail=f"Customer ID {req.customer_id} is already linked to another user account.",
                 )
             linked_customer_id = req.customer_id
-        else:
-            # Attempt auto-linking by customer email if existing
-            cust_by_email = db.query(Customer).filter(Customer.email == email_clean).first()
-            if cust_by_email:
-                linked_user = db.query(User).filter(User.customer_id == cust_by_email.customer_id).first()
-                if not linked_user:
-                    linked_customer_id = cust_by_email.customer_id
+        # Note: Unverified self-registration without verified matching ID does NOT auto-claim legacy accounts
 
         user = User(
             email=email_clean,
@@ -143,6 +144,7 @@ class AuthService:
             role=user.role,
             vendor_id=user.vendor_id,
             customer_id=user.customer_id,
+            token_version=user.token_version or 1,
         )
 
         refresh_token_str, token_digest, family_id, jti, expire_dt = create_refresh_token(
@@ -250,6 +252,7 @@ class AuthService:
             role=user.role,
             vendor_id=user.vendor_id,
             customer_id=user.customer_id,
+            token_version=user.token_version or 1,
         )
 
         db.commit()
@@ -267,10 +270,13 @@ class AuthService:
         )
 
     @staticmethod
-    def revoke_refresh_token(db: Session, refresh_token_str: str) -> bool:
+    def revoke_refresh_token(db: Session, refresh_token_str: str, access_token_jti: Optional[str] = None) -> bool:
         """
-        Revoke a single refresh token (user logout).
+        Revoke a single refresh token (user logout), and optionally blacklist the accompanying access token JTI.
         """
+        if access_token_jti:
+            revoke_access_jti(access_token_jti)
+
         try:
             decode_token(refresh_token_str, expected_type="refresh")
         except HTTPException:
@@ -289,7 +295,8 @@ class AuthService:
     @staticmethod
     def revoke_all_sessions(db: Session, user_id: int) -> int:
         """
-        Revoke all active refresh tokens for a user across all devices/sessions.
+        Revoke all active refresh tokens for a user across all devices/sessions,
+        and increment token_version to immediately invalidate all existing access tokens.
         """
         count = db.query(RefreshToken).filter(
             RefreshToken.user_id == user_id,
@@ -298,8 +305,12 @@ class AuthService:
             {"is_revoked": True, "revoked_at": datetime.utcnow()},
             synchronize_session=False,
         )
+        user = db.query(User).filter(User.id == user_id).first()
+        if user:
+            user.token_version = (user.token_version or 1) + 1
+            user.updated_at = datetime.utcnow()
         db.commit()
-        logger.info("Revoked %s active session(s) for user_id=%s", count, user_id)
+        logger.info("Revoked %s active session(s) and invalidated access tokens for user_id=%s", count, user_id)
         return count
 
     @staticmethod
@@ -320,11 +331,13 @@ class AuthService:
             )
 
         user.hashed_password = hash_password(new_password)
+        user.token_version = (user.token_version or 1) + 1
         user.updated_at = datetime.utcnow()
 
-        # Revoke all active sessions
+        # Revoke all active sessions and access tokens
         AuthService.revoke_all_sessions(db, user.id)
         db.commit()
+        logger.info("Password successfully changed and sessions invalidated for user_id=%s", user.id)
         logger.info("Password successfully changed for user_id=%s", user.id)
 
     @staticmethod

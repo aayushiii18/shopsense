@@ -48,6 +48,7 @@ class User(Base):
 
     is_active = Column(Boolean, default=True, nullable=False)
     is_verified = Column(Boolean, default=False, nullable=False)
+    token_version = Column(Integer, default=1, nullable=False)
 
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
@@ -62,6 +63,10 @@ class User(Base):
         CheckConstraint(
             "role IN ('ADMIN', 'VENDOR', 'CUSTOMER')",
             name="ck_users_role",
+        ),
+        CheckConstraint(
+            "(role != 'VENDOR') OR (vendor_id IS NOT NULL)",
+            name="ck_users_vendor_has_id",
         ),
     )
 

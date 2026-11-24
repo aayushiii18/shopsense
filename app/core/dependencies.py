@@ -138,6 +138,31 @@ def get_current_user(
             detail="User account is inactive or disabled.",
         )
 
+    # Invalidate tokens if user's session token_version has been incremented (logout-all / password change / deactivation)
+    token_ver = payload.get("token_version")
+    if token_ver is not None and token_ver != (user.token_version or 1):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Session has been terminated or invalidated by credential changes. Please re-authenticate.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # Invalidate tokens if the user's role has been modified since issuance
+    if payload.get("role") and payload.get("role") != user.role:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token role claims mismatch current user privileges. Please re-authenticate.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # Invalidate tokens if vendor tenant linkage has changed
+    if user.role == UserRole.VENDOR and payload.get("vendor_id") != user.vendor_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token tenant claims mismatch current vendor entity linkage. Please re-authenticate.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     return user
 
 
