@@ -182,10 +182,13 @@ def test_07_admin_api_endpoints_registered_and_secured(client, admin_headers, cu
     assert "total_transactions" in data
     assert "total_gmv" in data
 
-    # Admin health diagnostic
+    # Admin health diagnostic (upgraded in Milestone 4 Step 3 Integration Status Module)
     resp_health = client.get("/admin/health", headers=admin_headers)
     assert resp_health.status_code == 200
-    assert resp_health.json()["status"] == "healthy"
+    health_data = resp_health.json()
+    assert health_data["overall_status"] in ("HEALTHY", "DEGRADED", "UNAVAILABLE")
+    assert health_data["status"] in ("healthy", "degraded", "unavailable")
+    assert "components" in health_data
 
     # Admin stats diagnostic
     resp_stats = client.get("/admin/stats", headers=admin_headers)

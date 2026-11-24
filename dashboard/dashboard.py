@@ -12,8 +12,11 @@ Sections:
   7. 📈 Demand Forecasting (Time-series forecast, seasonality, 14-day projection, holdout MAE/RMSE/WAPE)
   8. 🎯 Product Recommendations (Collaborative filtering, similarity rationale, cold-start fallback, Precision@K)
   9. 🛍️ Customer Catalog Showcase (Storefront shopper preview with category filters and product cards)
+  10. ⚡ ETL & Data Warehouse Operations (Bulk ingestion, staging, quarantine resolution, marts)
+  11. 🩺 Integration Status / System Health (Database, APIs, ML models, MLflow, Workflows diagnostics)
 """
 
+import html
 import os
 import sys
 import math
@@ -52,17 +55,19 @@ def _get_api_base() -> str:
 
 
 API_BASE = _get_api_base()
+_api_reachable_this_run = True
 
 
 @st.cache_data(ttl=60)
 def fetch_report_bytes(kind: str) -> bytes:
     """Fetches PDF or Excel report binary from API or direct service fallback."""
-    try:
-        resp = requests.get(f"{API_BASE}/reports/{kind}", timeout=2)
-        if resp.status_code == 200:
-            return resp.content
-    except Exception:
-        pass
+    if _api_reachable_this_run:
+        try:
+            resp = requests.get(f"{API_BASE}/reports/{kind}", timeout=2)
+            if resp.status_code == 200:
+                return resp.content
+        except Exception:
+            pass
     try:
         from app.database import SessionLocal
         from app.services.report_service import generate_pdf_report, generate_excel_report
@@ -91,6 +96,8 @@ def _auth_headers() -> dict:
 
 def api_get(path: str, timeout: float = 1.0):
     """Safe GET helper returning JSON or None on failure."""
+    if not _api_reachable_this_run and path != "/":
+        return None
     try:
         resp = requests.get(f"{API_BASE}{path}", headers=_auth_headers(), timeout=timeout)
         resp.raise_for_status()
@@ -347,6 +354,7 @@ with st.sidebar:
         "🎯 Recommendations",
         "🛍️ Customer Catalog",
         "⚡ ETL & Data Warehouse",
+        "🩺 Integration Status / System Health",
     ]
 
     current_role = auth_user.get("role") if auth_user else None
@@ -384,14 +392,18 @@ with st.sidebar:
     )
 
     is_live_api = (data_source == "Live API (PostgreSQL)")
+    api_is_online = False
     if is_live_api:
         api_health = api_get("/")
         if api_health and api_health.get("status") == "ok":
+            api_is_online = True
             st.success("🟢 API Connected")
         else:
             st.warning("🔴 API Offline — Fallback active")
+        _api_reachable_this_run = api_is_online
         st.caption(f"Endpoint: `{API_BASE}`")
     else:
+        _api_reachable_this_run = False
         st.info("📁 Standalone Demo Mode (Local CSVs)")
 
     st.markdown("---")
@@ -414,6 +426,156 @@ def get_products_list():
         if p_list:
             return pd.DataFrame(p_list)
     return csv_data["products"].copy()
+
+
+def fetch_integration_health(live_api: bool, api_online: bool) -> dict:
+    """Fetch system integration health via /admin/health API or direct service fallback."""
+    if live_api and api_online:
+        try:
+            headers = _auth_headers()
+            resp = requests.get(f"{API_BASE}/admin/health", headers=headers, timeout=5.0)
+            if resp.status_code == 200:
+                return resp.json()
+            if resp.status_code in (401, 403):
+                return {"_auth_error": "Administrator privileges required to view system diagnostics."}
+        except Exception:
+            pass
+
+    from app.database import SessionLocal
+    from app.services import health_service
+
+    db = SessionLocal()
+    try:
+        try:
+            from app.main import app as fastapi_app
+            route_paths = list(fastapi_app.openapi().get("paths", {}).keys())
+        except Exception:
+            route_paths = None
+        return health_service.get_system_health(db=db, route_paths=route_paths)
+    except Exception:
+        return health_service.get_system_health(db=None, route_paths=None)
+    finally:
+        db.close()
+
+
+def render_integration_status_section(live_api: bool, api_online: bool, key_prefix: str = "health"):
+    """Render the Admin Integration Status & System Health component cards and diagnostics."""
+    hdr_col1, hdr_col2 = st.columns([4, 1])
+    with hdr_col1:
+        st.markdown("### 🩺 Integration Status / System Health")
+        st.caption("Real-time diagnostics across Database, APIs, ML Models, MLflow, and Automated Workflows")
+    with hdr_col2:
+        st.button("🔄 Refresh Health", key=f"{key_prefix}_refresh_btn", use_container_width=True)
+
+    health_report = fetch_integration_health(live_api=live_api, api_online=api_online)
+
+    if health_report.get("_auth_error"):
+        st.error(f"🔒 {health_report['_auth_error']}")
+        return
+
+    overall = str(health_report.get("overall_status", "UNAVAILABLE")).upper()
+    last_checked_ts = str(health_report.get("timestamp", "N/A"))[:19].replace("T", " ") + " UTC"
+
+    status_meta = {
+        "HEALTHY": ("🟢 HEALTHY", "badge-healthy", "#10b981"),
+        "DEGRADED": ("🟡 DEGRADED", "badge-warning", "#f59e0b"),
+        "UNAVAILABLE": ("🔴 UNAVAILABLE", "badge-critical", "#ef4444"),
+    }
+    ov_label, ov_badge_cls, _ = status_meta.get(overall, ("🔴 UNAVAILABLE", "badge-critical", "#ef4444"))
+
+    ov_c1, ov_c2, ov_c3, ov_c4 = st.columns(4)
+    with ov_c1:
+        st.markdown(
+            f"""
+            <div class="sp-card">
+                <div class="sp-card-title">Overall System Health</div>
+                <div style="margin-top: 8px;">
+                    <span class="sp-badge {ov_badge_cls}" style="font-size: 0.95rem; padding: 6px 14px;">{ov_label}</span>
+                </div>
+                <div class="sp-card-sub">{html.escape(str(health_report.get('system_name', 'ShopSense')))} v{html.escape(str(health_report.get('version', '1.0.0')))}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    components = health_report.get("components", {})
+    healthy_cnt = sum(1 for c in components.values() if c.get("status") == "HEALTHY")
+    degraded_cnt = sum(1 for c in components.values() if c.get("status") == "DEGRADED")
+    unavail_cnt = sum(1 for c in components.values() if c.get("status") == "UNAVAILABLE")
+
+    ov_c2.metric("🟢 Healthy Components", f"{healthy_cnt} / {len(components)}")
+    ov_c3.metric("🟡 Degraded / 🔴 Down", f"{degraded_cnt} Degraded / {unavail_cnt} Down")
+    ov_c4.metric("🕒 Last Checked", last_checked_ts)
+
+    # Individual Component Status Cards (7 monitored components)
+    ordered_keys = [
+        "database",
+        "sales_api",
+        "forecasting_api",
+        "recommendation_api",
+        "mlflow",
+        "automated_workflows",
+        "backend_application",
+    ]
+    ordered_components = [components[k] for k in ordered_keys if k in components]
+
+    # Render in 3-column rows cleanly
+    for i in range(0, len(ordered_components), 3):
+        cols = st.columns(3)
+        for j, comp in enumerate(ordered_components[i : i + 3]):
+            c_status = str(comp.get("status", "UNAVAILABLE")).upper()
+            c_label, c_badge, border_hex = status_meta.get(c_status, ("🔴 UNAVAILABLE", "badge-critical", "#ef4444"))
+            c_name = html.escape(str(comp.get("name", "Component")))
+            c_msg = html.escape(str(comp.get("message", "")))
+            c_ts = html.escape(str(comp.get("last_checked", ""))[:19].replace("T", " "))
+            c_lat = comp.get("latency_ms")
+            lat_txt = f"{c_lat:.2f} ms" if isinstance(c_lat, (int, float)) else "N/A"
+            details = comp.get("details") or {}
+
+            extra_line = ""
+            if comp.get("name") == "Automated Workflows":
+                sched_state = "Active" if details.get("scheduler_running") else "Inactive"
+                last_res = html.escape(str(details.get("latest_result", "NO_RUNS_RECORDED")))
+                last_run = html.escape(str(details.get("last_execution") or "Never")[:19].replace("T", " "))
+                extra_line = f"<div class='sp-card-sub'>Scheduler: <strong>{sched_state}</strong> | Last Run: <strong>{last_res}</strong> ({last_run})</div>"
+            elif comp.get("name") in ("Forecasting API", "Recommendation API"):
+                cfg_p = html.escape(str(details.get("configured_path", "default")))
+                extra_line = f"<div class='sp-card-sub'>Model Path: <code>{cfg_p}</code></div>"
+            elif comp.get("name") == "MLflow":
+                exps = details.get("experiments_count", "-")
+                rms = details.get("registered_models_count", "-")
+                extra_line = f"<div class='sp-card-sub'>Experiments: <strong>{exps}</strong> | Registry Models: <strong>{rms}</strong></div>"
+
+            with cols[j]:
+                st.markdown(
+                    f"""
+                    <div class="sp-card" style="border-left: 4px solid {border_hex};">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                            <span class="sp-card-title" style="margin-bottom:0;">{c_name}</span>
+                            <span class="sp-badge {c_badge}">{c_label}</span>
+                        </div>
+                        <div style="font-size:0.88rem; color:#e2e8f0; min-height:42px; margin-bottom:6px;">{c_msg}</div>
+                        {extra_line}
+                        <div class="sp-card-sub">Latency: <strong>{lat_txt}</strong> • Checked: {c_ts}</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+    # Diagnostic Summary Table
+    if ordered_components:
+        df_health = pd.DataFrame([
+            {
+                "Component": c.get("name"),
+                "Status": c.get("status"),
+                "Latency (ms)": c.get("latency_ms"),
+                "Diagnostic Message": c.get("message"),
+                "Last Checked (UTC)": str(c.get("last_checked", ""))[:19].replace("T", " "),
+            }
+            for c in ordered_components
+        ])
+        st.dataframe(df_health, use_container_width=True, hide_index=True)
+
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -818,6 +980,11 @@ if selected_page == "📊 Dashboard":
         st.dataframe(pd.DataFrame(tx_recent), use_container_width=True)
     else:
         st.info("No recent transaction activity recorded.")
+
+    if current_role not in ("VENDOR", "CUSTOMER"):
+        st.markdown("---")
+        with st.expander("🩺 Admin Integration Status / System Health", expanded=True):
+            render_integration_status_section(live_api=is_live_api, api_online=api_is_online, key_prefix="exec_health")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -2357,3 +2524,17 @@ elif selected_page == "⚡ ETL & Data Warehouse":
                 st.info("Daily sales mart is currently empty. Click 'Refresh Sales Mart' above to populate from transactions.")
         finally:
             db.close()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 11. 🩺 INTEGRATION STATUS / SYSTEM HEALTH
+# ═════════════════════════════════════════════════════════════════════════════
+elif selected_page == "🩺 Integration Status / System Health":
+    st.title("🩺 Integration Status / System Health")
+    st.caption("Centralized Monitoring of PostgreSQL Database, Domain APIs, ML Artifacts, MLflow, and Automated Workflows")
+
+    if current_role in ("VENDOR", "CUSTOMER"):
+        st.error("🔒 Access Denied: Administrator privileges are required to access system diagnostics.")
+    else:
+        render_integration_status_section(live_api=is_live_api, api_online=api_is_online, key_prefix="page_health")
+

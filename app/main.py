@@ -7,7 +7,12 @@ Start the server:
 Interactive API docs: http://127.0.0.1:8000/docs
 """
 
-from fastapi import FastAPI
+from datetime import datetime, timezone
+from fastapi import Depends, FastAPI, HTTPException, status
+from sqlalchemy.orm import Session
+
+from app.database import get_db
+from app.services import health_service
 from app.routes import (
     vendor_routes,
     product_routes,
@@ -88,6 +93,44 @@ app.include_router(catalog_routes.router)
 def root():
     """Health-check endpoint."""
     return {"status": "ok", "message": "ShopSense API is running."}
+
+
+@app.get("/health/live", tags=["Health"], summary="Liveness Probe")
+def liveness_probe():
+    """
+    Lightweight process liveness probe (does not query downstream dependencies).
+    Returns 200 UP whenever the FastAPI server process is responsive.
+    """
+    return {
+        "status": "UP",
+        "service": settings.project_name,
+        "version": settings.version,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@app.get("/health/ready", tags=["Health"], summary="Readiness Probe")
+def readiness_probe(db: Session = Depends(get_db)):
+    """
+    Service readiness probe verifying core database connectivity.
+    Returns 200 READY if operational or 503 Service Unavailable if database is unreachable.
+    For detailed component diagnostics, administrators should query GET /admin/health.
+    """
+    db_check = health_service.check_database_health(db)
+    if db_check["status"] == "UNAVAILABLE":
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "status": "NOT_READY",
+                "database": "UNAVAILABLE",
+                "timestamp": db_check["last_checked"],
+            },
+        )
+    return {
+        "status": "READY",
+        "database": db_check["status"],
+        "timestamp": db_check["last_checked"],
+    }
 
 
 @app.on_event("startup")

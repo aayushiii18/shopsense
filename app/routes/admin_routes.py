@@ -8,7 +8,7 @@ GET /admin/health     Detailed administrative health diagnostics
 
 from typing import Dict, Any, Optional
 from pydantic import BaseModel, Field
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Request, status
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
@@ -19,6 +19,8 @@ from app.models.product import Product
 from app.models.customer import Customer
 from app.models.transaction import Transaction
 from app.core.dependencies import require_admin
+from app.schemas.health_schema import IntegrationStatusResponse
+from app.services import health_service
 from backend.config import get_settings
 
 router = APIRouter(
@@ -140,20 +142,21 @@ def admin_stats(db: Session = Depends(get_db)):
 
 @router.get(
     "/health",
-    response_model=AdminHealthResponse,
-    summary="Administrative System Health Diagnostics",
+    response_model=IntegrationStatusResponse,
+    summary="Administrative Integration Status & System Health Diagnostics",
 )
-def admin_health(db: Session = Depends(get_db)):
+def admin_health(request: Request, db: Session = Depends(get_db)):
     """
-    Health diagnostic verification including database roundtrip and system metadata.
-    Requires ADMIN privileges.
+    Comprehensive integration health check covering:
+      - Database (PostgreSQL / SQLAlchemy)
+      - Sales API
+      - Forecasting API & Model
+      - Recommendation API & Model
+      - MLflow Tracking & Registry
+      - Automated Workflows & Scheduler
+      - Backend Application
+
+    Requires ADMIN privileges. Individual dependency failures report degraded/unavailable states cleanly without crashing diagnostics.
     """
-    settings = get_settings()
-    # Check DB roundtrip
-    db.execute(func.now())
-    return {
-        "status": "healthy",
-        "database": "connected",
-        "version": settings.version,
-        "project_name": settings.project_name,
-    }
+    route_paths = list(request.app.openapi().get("paths", {}).keys())
+    return health_service.get_system_health(db=db, route_paths=route_paths)
