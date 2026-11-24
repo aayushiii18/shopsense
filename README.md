@@ -1,6 +1,6 @@
 # ShopSense / StockPilot — Multi-Vendor Retail Management, Analytics & Data Warehouse Platform
 > **Smarter Stock. Better Decisions.**  
-> *Infosys Springboard Internship Project — Stages 1 through 7 Complete*
+> *Infosys Springboard Internship Project — Stages 1 through 8 Complete*
 
 ---
 
@@ -12,7 +12,8 @@
 - **Advanced Commerce & Financial Operations (Stage 4):** Commission tiers with transaction-time rate snapshotting, nullable Cost of Goods Sold (COGS) reporting with explicit coverage disclosure, atomic refunds with idempotency, and vendor settlement ledgers.
 - **Customer Retention & Intelligence Engine (Stage 5):** Temporal churn prediction, cohort retention matrices, customer lifetime value (CLV), item-based collaborative filtering, catalog taxonomy normalization, and promotion safety stock validation.
 - **Structured ETL, Bulk Ingestion & Data Warehouse (Stage 6):** Chunked CSV data ingestion, staging buffer, row-level validation, database-enforced deduplication, quarantine triage and reprocessing, automated reconciliation, and dimensional data marts with scheduled refresh.
-- **Authentication, JWT Security & Multi-Tenant RBAC (Stage 7):** Bcrypt credential hashing, JWT access and refresh token lifecycle, refresh token family rotation with reuse detection, public customer registration with role escalation protection, backend-enforced multi-tenant vendor isolation, customer data privacy, administrative bootstrap CLI, and authentication-aware Streamlit navigation.
+- **Authentication, JWT Security & Multi-Tenant RBAC (Stage 7 / 7.1):** Bcrypt credential hashing, JWT access and refresh token lifecycle, refresh token family rotation with reuse detection, token versioning with immediate revocation on logout/password change/deactivation, backend-enforced multi-tenant vendor isolation, customer data privacy, administrative bootstrap CLI, and authentication-aware Streamlit navigation.
+- **Docker, Containerization, CI/CD & Final Integration (Stage 8):** Production-grade multi-service Docker Compose topology (PostgreSQL, FastAPI backend, Streamlit dashboard, MLflow tracking server), non-root user execution, automated idempotent schema initialization entrypoint, service dependency healthchecks, named persistent volumes, and GitHub Actions automated CI verification pipeline.
 
 ---
 
@@ -344,3 +345,178 @@ PostgreSQL database verification confirms zero data loss and zero synthetic data
 - **Settlements:** 0 records (unchanged)
 - **Gross Merchandise Value (GMV):** ₹87,725.58 (exact match across operational DB and dimensional mart)
 - **Daily Sales Mart:** 541 dimensional records aggregating 100% of historical transactions.
+
+---
+
+## 11. Stage 8: Docker, Containerization & CI/CD Pipeline
+
+ShopSense is fully containerized using Docker and orchestrated with Docker Compose. The architecture comprises four core interconnected services running on an isolated bridge network with healthcheck dependencies and persistent storage.
+
+### A. Container Topology & Service Architecture
+
+```
+                                  ┌───────────────────────────┐
+                                  │   Host Browser / Client   │
+                                  └─────────────┬─────────────┘
+                                                │
+                 ┌──────────────────────────────┼──────────────────────────────┐
+                 │ :8501                        │ :8000                        │ :5000
+                 ▼                              ▼                              ▼
+  ┌──────────────────────────────┐ ┌───────────────────────────┐ ┌───────────────────────────┐
+  │      shopsense-dashboard     │ │     shopsense-backend     │ │      shopsense-mlflow     │
+  │     (Streamlit 10 Views)     │ │    (FastAPI REST APIs)    │ │ (Tracking Server & Registry)│
+  │  Internal: :8501             │ │ Internal: :8000           │ │ Internal: :5000           │
+  │  User: appuser (non-root)    │ │ User: appuser (non-root)  │ │ User: appuser (non-root)  │
+  └──────────────┬───────────────┘ └─────────────┬─────────────┘ └─────────────┬─────────────┘
+                 │                               │                             │
+                 │ http://backend:8000           │ http://mlflow:5000          │
+                 │                               │                             │
+                 └───────────────────────────────┼─────────────────────────────┘
+                                                 │
+                                                 │ postgresql://db:5432/shopsense
+                                                 ▼
+                                  ┌───────────────────────────┐
+                                  │        shopsense-db       │
+                                  │   (PostgreSQL 15 Alpine)  │
+                                  │ Internal: :5432           │
+                                  │ Persistent: postgres_data │
+                                  └───────────────────────────┘
+```
+
+### B. Docker Compose Services & Port Mappings
+
+| Service | Container Name | Image / Build | Port Mapping | Healthcheck Endpoint / Command |
+|---|---|---|---|---|
+| **Database** | `shopsense-db` | `postgres:15-alpine` | `5432:5432` | `pg_isready -U postgres -d shopsense` |
+| **Backend API** | `shopsense-backend` | `./Dockerfile.backend` | `8000:8000` | `curl -f http://localhost:8000/docs` |
+| **Dashboard** | `shopsense-dashboard` | `./Dockerfile.dashboard` | `8501:8501` | `curl -f http://localhost:8501/_stcore/health` |
+| **MLflow Server**| `shopsense-mlflow` | `./Dockerfile.backend` (mlflow cmd) | `5000:5000` | `curl -f http://localhost:5000/` |
+
+### C. Prerequisites
+- **Docker Desktop** (Windows / macOS) or **Docker Engine 20.10+ & Docker Compose V2** (Linux).
+- Minimum 4 GB RAM recommended for multi-container orchestration.
+
+### D. Environment Configuration
+Copy `.env.example` to create `.env`:
+```powershell
+copy .env.example .env     # Windows PowerShell
+# or
+cp .env.example .env       # Linux / macOS
+```
+Key configuration parameters:
+```dotenv
+DATABASE_URL=postgresql://postgres:postgrespassword@localhost:5432/shopsense
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=postgrespassword
+POSTGRES_DB=shopsense
+POSTGRES_PORT=5432
+API_BASE_URL=http://backend:8000
+MLFLOW_TRACKING_URI=http://mlflow:5000
+ADMIN_EMAIL=admin@shopsense.internal
+ADMIN_PASSWORD=AdminSecure123!
+SECRET_KEY=replace-with-a-secure-32-byte-hex-secret-in-production
+```
+
+### E. Quickstart with Docker Compose
+
+1. **Build and start all services in background:**
+   ```bash
+   docker compose up --build -d
+   ```
+
+2. **Monitor startup and healthchecks:**
+   ```bash
+   docker compose ps
+   docker compose logs -f backend
+   ```
+
+3. **Access application endpoints:**
+   - **Streamlit Interactive UI:** [http://localhost:8501](http://localhost:8501)
+   - **FastAPI Interactive Docs:** [http://localhost:8000/docs](http://localhost:8000/docs)
+   - **FastAPI OpenAPI Schema:** [http://localhost:8000/openapi.json](http://localhost:8000/openapi.json)
+   - **MLflow Tracking Server:** [http://localhost:5000](http://localhost:5000)
+   - **PostgreSQL Database:** `localhost:5432` (user: `postgres`, db: `shopsense`)
+
+4. **Stop services:**
+   ```bash
+   docker compose down
+   ```
+
+5. **Stop services and purge persistent storage:**
+   ```bash
+   docker compose down -v
+   ```
+
+### F. Automated Database Initialization & Idempotency
+Container startup is managed by `docker_entrypoint.py`:
+- **Readiness Polling:** Waits for PostgreSQL to accept socket connections with retry backoff.
+- **Safe Schema Creation:** Invokes `Base.metadata.create_all(bind=engine)` ensuring tables exist without dropping existing tables.
+- **Stage 7 Migration Check:** Executes `migrate_stage7.run_migration()` idempotently to verify `users`, `refresh_tokens`, and `token_version`.
+- **Fresh vs. Existing Database Handling:**
+  - **Fresh Database (0 vendors):** Automatically executes baseline ingestion from `data/` (`seed_data.py`), creating initial vendors, products, inventory, customers, transactions, stock movements, and customer interactions, followed by daily sales mart aggregation.
+  - **Existing Database (vendors > 0):** Detects existing rows and preserves 100% of historical transactions, inventory, and customer records without modification or duplication.
+- **Idempotent Admin Bootstrap:** Idempotently ensures the administrator account exists with credentials from `ADMIN_EMAIL` and `ADMIN_PASSWORD`.
+
+### G. Manual Database Management in Docker
+If manual migration or administration is needed within containers:
+```bash
+# Execute Stage 7 migration check inside running backend container
+docker compose exec backend python migrate_stage7.py
+
+# Bootstrap or update administrator account
+docker compose exec backend python bootstrap_admin.py --email admin@shopsense.internal --password NewPassword123! --force
+
+# Run platform consistency validation inside container
+docker compose exec backend python validate_consistency.py
+```
+
+### H. Local Development Startup (Without Docker)
+For local development outside containers:
+```powershell
+# 1. Activate virtual environment
+.\venv\Scripts\Activate.ps1
+
+# 2. Run database setup and migrations
+python create_tables.py
+python migrate_stage7.py
+python seed_data.py
+python bootstrap_admin.py --email admin@shopsense.internal --password AdminSecure123!
+
+# 3. Start FastAPI backend (Terminal 1)
+uvicorn app.main:app --reload --port 8000
+
+# 4. Start Streamlit dashboard (Terminal 2)
+streamlit run dashboard/dashboard.py
+
+# 5. Start MLflow tracking server (Terminal 3)
+mlflow server --backend-store-uri sqlite:///mlflow.db --port 5000
+```
+
+### I. GitHub Actions CI/CD Pipeline (`.github/workflows/ci.yml`)
+The automated CI pipeline runs on every `push` and `pull_request` targeting `main`:
+1. **Runner Environment:** `ubuntu-latest` with Python 3.10 and PostgreSQL 15 service container.
+2. **Dependency Management:** Pip dependency caching for accelerated builds.
+3. **Syntax & AST Validation:** Strict AST parsing across all Python modules to catch syntax and import errors.
+4. **Database Migrations:** Automated table generation, Stage 7 migration execution, and seed data verification.
+5. **Data Consistency Validation:** Runs `validate_consistency.py` ensuring 100.0% consistency score across 12 platform invariants.
+6. **Dedicated Security Testing:** Runs all 46 Stage 7/7.1 authentication, JWT security, and RBAC tests (`test_stage7_auth_security.py`).
+7. **Complete Regression Suite:** Runs all 221 unit, integration, ML, and financial tests across Stages 1–7.1.
+8. **Streamlit AppTest Verification:** Headless rendering test confirming 0 exceptions across all 10 dashboard views.
+
+### J. Persistent Volume Storage
+- `shopsense-postgres-data`: Mounted to `/var/lib/postgresql/data`. Preserves transaction ledgers, customer accounts, and schema tables across container rebuilds.
+- `shopsense-mlflow-data`: Mounted to `/mlflow`. Preserves MLflow experiment tracking SQLite database and model artifacts.
+
+### K. Troubleshooting Common Startup Errors
+1. **Port Conflict (`bind: address already in use`):**
+   - If local PostgreSQL is running on host port `5432`, set `POSTGRES_PORT=5433` in `.env`.
+   - If port `8000` or `8501` is occupied, change the host port mapping in `docker-compose.yml` (e.g. `"8080:8000"`, `"8502:8501"`).
+2. **Backend Fails Health Check:**
+   - Check container logs: `docker compose logs backend`.
+   - Verify that the `db` service is healthy: `docker compose ps`.
+3. **Streamlit Cannot Connect to API:**
+   - Verify `API_BASE_URL` in `.env` is set to `http://backend:8000` (container-to-container), not `http://localhost:8000` (browser-to-host).
+4. **Resetting Database to Clean State:**
+   - Run `docker compose down -v` to delete persistent volumes.
+   - Run `docker compose up --build -d` to spin up a fresh database with automatic initial catalog seeding.
+

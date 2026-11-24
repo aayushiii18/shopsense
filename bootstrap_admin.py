@@ -29,6 +29,53 @@ def parse_args():
     return parser.parse_args()
 
 
+def bootstrap_admin_user(email: str, password: str, force: bool = False, db=None) -> User:
+    """Idempotently bootstrap or update an administrator account."""
+    close_db = False
+    if db is None:
+        db = SessionLocal()
+        close_db = True
+
+    try:
+        email = email.strip().lower()
+        existing = db.query(User).filter(User.email == email).first()
+        if existing:
+            if existing.role != UserRole.ADMIN:
+                raise ValueError(f"User {email} already exists with non-admin role '{existing.role}'.")
+
+            if force:
+                existing.hashed_password = hash_password(password)
+                existing.updated_at = datetime.utcnow()
+                db.commit()
+                db.refresh(existing)
+                print(f"Success: Administrator account '{email}' updated with new credentials.")
+                return existing
+            else:
+                print(f"Administrator account '{email}' already exists. Use --force to update credentials.")
+                return existing
+
+        new_admin = User(
+            email=email,
+            hashed_password=hash_password(password),
+            role=UserRole.ADMIN,
+            is_active=True,
+            is_verified=True,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow(),
+        )
+        db.add(new_admin)
+        db.commit()
+        db.refresh(new_admin)
+        print(f"Success: Initial administrator account created successfully (User ID: {new_admin.id}, Email: {new_admin.email}).")
+        return new_admin
+    except Exception as e:
+        db.rollback()
+        raise e
+    finally:
+        if close_db:
+            db.close()
+
+
 def main():
     args = parse_args()
 
@@ -54,44 +101,11 @@ def main():
         print("Error: Password must be at least 8 characters long.", file=sys.stderr)
         sys.exit(1)
 
-    db = SessionLocal()
     try:
-        existing = db.query(User).filter(User.email == email).first()
-        if existing:
-            if existing.role != UserRole.ADMIN:
-                print(f"Error: User {email} already exists with non-admin role '{existing.role}'.", file=sys.stderr)
-                sys.exit(1)
-
-            if args.force:
-                existing.hashed_password = hash_password(password)
-                existing.updated_at = datetime.utcnow()
-                db.commit()
-                print(f"Success: Administrator account '{email}' updated with new credentials.")
-                return
-            else:
-                print(f"Administrator account '{email}' already exists. Use --force to update credentials.")
-                return
-
-        new_admin = User(
-            email=email,
-            hashed_password=hash_password(password),
-            role=UserRole.ADMIN,
-            is_active=True,
-            is_verified=True,
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow(),
-        )
-        db.add(new_admin)
-        db.commit()
-        db.refresh(new_admin)
-        print(f"Success: Initial administrator account created successfully (User ID: {new_admin.id}, Email: {new_admin.email}).")
-
+        bootstrap_admin_user(email=email, password=password, force=args.force)
     except Exception as e:
-        db.rollback()
         print(f"Error during bootstrap: {e}", file=sys.stderr)
         sys.exit(1)
-    finally:
-        db.close()
 
 
 if __name__ == "__main__":
