@@ -24,7 +24,7 @@ from app.models.stock_movement import StockMovement
 from app.models.refund import Refund
 
 
-def _create_test_vendor(client, email="vendor_stage4@example.com", name="Stage4 Vendor", tier="TIER_STANDARD"):
+def _create_test_vendor(client, email="vendor_stage4@example.com", name="Stage4 Vendor", tier="TIER_STANDARD", approve: bool = False):
     resp = client.post("/vendors/", json={
         "name": name,
         "email": email,
@@ -33,7 +33,12 @@ def _create_test_vendor(client, email="vendor_stage4@example.com", name="Stage4 
         "commission_tier": tier,
     })
     assert resp.status_code == 201
-    return resp.json()
+    data = resp.json()
+    if approve:
+        app_resp = client.put(f"/vendors/{data['id']}/status", json={"status": "ACTIVE"})
+        assert app_resp.status_code == 200
+        return app_resp.json()
+    return data
 
 
 def _create_test_product(client, vendor_id, price=100.0, cost_price=None, name="Stage4 Product"):
@@ -157,7 +162,7 @@ def test_nullable_cogs_accounting_and_zero_fabrication(client, db_session):
 
 # ── Test 5: Atomic Refund & Payment Status Update ──────────────────────────
 def test_atomic_refund_and_payment_status(client, db_session):
-    v = _create_test_vendor(client, email="refund_vendor@example.com")
+    v = _create_test_vendor(client, email="refund_vendor@example.com", approve=True)
     p = _create_test_product(client, v["id"], price=50.0)
 
     t = Transaction(product_id=p["id"], vendor_id=v["id"], quantity=2, unit_price=50.0, amount=100.0, discount_amount=0.0)
@@ -194,7 +199,7 @@ def test_atomic_refund_and_payment_status(client, db_session):
 
 # ── Test 6: Refund Exceeding Net Value Rejected ────────────────────────────
 def test_refund_exceeding_net_value_rejected(client, db_session):
-    v = _create_test_vendor(client, email="exceed_vendor@example.com")
+    v = _create_test_vendor(client, email="exceed_vendor@example.com", approve=True)
     p = _create_test_product(client, v["id"], price=100.0)
 
     # Net value = 100 - 20 discount = 80
@@ -216,7 +221,7 @@ def test_refund_exceeding_net_value_rejected(client, db_session):
 
 # ── Test 7: Strict Refund Idempotency ──────────────────────────────────────
 def test_refund_idempotency(client, db_session):
-    v = _create_test_vendor(client, email="idemp_vendor@example.com")
+    v = _create_test_vendor(client, email="idemp_vendor@example.com", approve=True)
     p = _create_test_product(client, v["id"], price=100.0)
 
     t = Transaction(product_id=p["id"], vendor_id=v["id"], quantity=1, unit_price=100.0, amount=100.0, discount_amount=0.0)
@@ -250,7 +255,7 @@ def test_refund_idempotency(client, db_session):
 
 # ── Test 8: Refund with Inventory Restocking & Audit Movement ───────────────
 def test_refund_with_inventory_restock(client, db_session):
-    v = _create_test_vendor(client, email="restock_vendor@example.com")
+    v = _create_test_vendor(client, email="restock_vendor@example.com", approve=True)
     p = _create_test_product(client, v["id"], price=50.0)
 
     inv = Inventory(product_id=p["id"], current_stock=20, warehouse="CENTRAL", reorder_level=5)
@@ -311,8 +316,8 @@ def test_interim_loopback_security_gate(client):
 # ── Test 10: Auditable Multi-Vendor Settlements & Commission Tiers ──────────
 def test_vendor_settlements_and_commission_tiers(client, db_session):
     # Create vendors across different approved tiers
-    v_starter = _create_test_vendor(client, email="starter@example.com", name="Starter Co", tier="TIER_STARTER")
-    v_pref = _create_test_vendor(client, email="pref@example.com", name="Preferred Co", tier="TIER_PREFERRED")
+    v_starter = _create_test_vendor(client, email="starter@example.com", name="Starter Co", tier="TIER_STARTER", approve=True)
+    v_pref = _create_test_vendor(client, email="pref@example.com", name="Preferred Co", tier="TIER_PREFERRED", approve=True)
 
     p1 = _create_test_product(client, v_starter["id"], price=100.0)
     p2 = _create_test_product(client, v_pref["id"], price=200.0)

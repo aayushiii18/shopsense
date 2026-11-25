@@ -23,8 +23,8 @@ from app.models.customer_interaction import CustomerInteraction
 
 def _seed_sample_ecosystem(db_session):
     """Seed 2 vendors, 3 products, 2 customers, and multiple transactions across months."""
-    v1 = Vendor(name="Tech Vendor Alpha", email="alpha@test.com", phone="+91-9876543210")
-    v2 = Vendor(name="Apparel Vendor Beta", email="beta@test.com", phone="+91-9876543211")
+    v1 = Vendor(name="Tech Vendor Alpha", email="alpha@test.com", phone="+91-9876543210", status="ACTIVE")
+    v2 = Vendor(name="Apparel Vendor Beta", email="beta@test.com", phone="+91-9876543211", status="ACTIVE")
     db_session.add_all([v1, v2])
     db_session.flush()
 

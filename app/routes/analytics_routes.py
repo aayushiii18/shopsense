@@ -20,7 +20,7 @@ from app.models.transaction import Transaction
 from app.models.vendor import Vendor
 from app.models.product import Product
 from app.models.user import User, UserRole
-from app.core.dependencies import get_current_user
+from app.core.dependencies import get_current_user, require_vendor_or_admin
 from app.schemas.revenue_schema import (
     TotalRevenueSummaryResponse,
     VendorRevenueItem,
@@ -98,9 +98,12 @@ def total_revenue(db: Session = Depends(get_db)):
     response_model=List[VendorRevenueItem],
     summary="Revenue grouped by vendor",
 )
-def revenue_by_vendor(db: Session = Depends(get_db)):
-    """Returns total revenue, units sold, and transaction count for each vendor via optimized SQL."""
-    rows = (
+def revenue_by_vendor(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_vendor_or_admin),
+):
+    """Returns total revenue, units sold, and transaction count grouped by vendor (tenant-scoped for VENDOR)."""
+    query = (
         db.query(
             Transaction.vendor_id,
             Vendor.name.label("vendor_name"),
@@ -109,7 +112,11 @@ def revenue_by_vendor(db: Session = Depends(get_db)):
             func.coalesce(func.sum(Transaction.quantity), 0).label("total_units_sold"),
         )
         .join(Vendor, Transaction.vendor_id == Vendor.id)
-        .group_by(Transaction.vendor_id, Vendor.name)
+    )
+    if current_user.role == UserRole.VENDOR:
+        query = query.filter(Transaction.vendor_id == current_user.vendor_id)
+    rows = (
+        query.group_by(Transaction.vendor_id, Vendor.name)
         .order_by(func.sum(Transaction.amount).desc())
         .all()
     )

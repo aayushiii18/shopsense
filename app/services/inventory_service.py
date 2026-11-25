@@ -26,11 +26,12 @@ from app.models.stock_movement import StockMovement
 from app.models.vendor import Vendor
 
 
-def get_inventory_status(db: Session) -> list[dict]:
+def get_inventory_status(db: Session, vendor_id: Optional[int] = None) -> list[dict]:
     """
-    Returns current stock levels, inventory valuation, and status badges for all products.
+    Returns current stock levels, inventory valuation, and status badges for catalog products.
+    Optionally scoped to a single vendor_id for multi-tenant isolation.
     """
-    rows = (
+    query = (
         db.query(
             Product.id.label("product_id"),
             Product.name.label("product_name"),
@@ -46,8 +47,10 @@ def get_inventory_status(db: Session) -> list[dict]:
         )
         .outerjoin(Inventory, Product.id == Inventory.product_id)
         .join(Vendor, Product.vendor_id == Vendor.id)
-        .all()
     )
+    if vendor_id is not None:
+        query = query.filter(Product.vendor_id == vendor_id)
+    rows = query.all()
 
     result = []
     for r in rows:
@@ -146,9 +149,11 @@ def get_stock_movements(
     product_id: int | None = None,
     movement_type: str | None = None,
     limit: int = 100,
+    vendor_id: int | None = None,
 ) -> list[dict]:
     """
     Retrieves recent stock movement audit records.
+    Optionally scoped to a single vendor_id for multi-tenant isolation.
     """
     query = (
         db.query(
@@ -167,6 +172,8 @@ def get_stock_movements(
         .order_by(StockMovement.created_at.desc())
     )
 
+    if vendor_id is not None:
+        query = query.filter(Product.vendor_id == vendor_id)
     if product_id is not None:
         query = query.filter(StockMovement.product_id == product_id)
     if movement_type:

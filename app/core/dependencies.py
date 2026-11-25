@@ -10,6 +10,7 @@ Roles:
 
 import logging
 import os
+import sys
 from typing import Optional, List
 
 from fastapi import Depends, HTTPException, Request, status, Header
@@ -29,13 +30,31 @@ def _is_legacy_test_client(request: Request) -> bool:
     """
     Check if the incoming request is from a legacy test execution (Stages 1–6)
     that did not pass an Authorization header.
-    Strictly disabled in production or if authentication enforcement is requested.
+    Strictly disabled in production, outside automated test execution, and on
+    reverse-proxied or auth-enforced requests.
     """
+    env = (os.getenv("ENVIRONMENT") or os.getenv("ENV") or "development").strip().lower()
+    if env == "production":
+        return False
+
     if request.headers.get("X-Enforce-Auth", "").lower() == "true":
         return False
 
+    # Never allow loopback bypass when behind a reverse proxy or forwarded headers
+    for proxy_header in ("X-Forwarded-For", "X-Real-IP", "Forwarded"):
+        if request.headers.get(proxy_header):
+            return False
+
     # Auth routes (/auth/*) always strictly require genuine authentication
     if request.url.path.startswith("/auth"):
+        return False
+
+    # Restrict legacy unauthenticated TestClient fallback strictly to automated test execution
+    explicit_bypass = os.getenv("ALLOW_LEGACY_TEST_BYPASS", "").strip().lower()
+    if explicit_bypass == "false":
+        return False
+    in_pytest = "pytest" in sys.modules
+    if not in_pytest and not (env in {"test", "testing"} and explicit_bypass == "true"):
         return False
 
     client = request.client
@@ -46,75 +65,26 @@ def _is_legacy_test_client(request: Request) -> bool:
     return False
 
 
-def get_current_user(
-    request: Request,
-    db: Session = Depends(get_db),
-    bearer_auth: Optional[HTTPAuthorizationCredentials] = Depends(bearer_security),
-    authorization: Optional[str] = Header(None, alias="Authorization"),
-) -> User:
-    """
-    FastAPI dependency extracting and verifying the authenticated user from the Bearer JWT token.
-    Supports OpenAPI HTTPBearer authorization scheme as well as raw Authorization headers.
-    Enforces active account status and fail-closed security.
-    """
-    # Extract raw token from HTTPBearer scheme or Authorization header
-    token: Optional[str] = None
+def _extract_bearer_token(
+    bearer_auth: Optional[HTTPAuthorizationCredentials],
+    authorization: Optional[str],
+) -> Optional[str]:
+    """Extract raw Bearer token from HTTPBearer credentials or Authorization header."""
     if bearer_auth and bearer_auth.credentials:
-        token = bearer_auth.credentials.strip()
-    elif authorization:
+        return bearer_auth.credentials.strip()
+    if authorization:
         if not authorization.startswith("Bearer "):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid authorization scheme. Bearer token required.",
                 headers={"WWW-Authenticate": "Bearer"},
             )
-        token = authorization[7:].strip()
+        return authorization[7:].strip()
+    return None
 
-    if not token:
-        # Check for legacy test client compatibility
-        if _is_legacy_test_client(request):
-            # Return an administrative test user for legacy test execution
-            test_admin = db.query(User).filter(User.email == "test_admin@shopsense.internal").first()
-            if not test_admin:
-                test_admin = User(
-                    id=9999,
-                    email="test_admin@shopsense.internal",
-                    hashed_password="test_hashed_password",
-                    role=UserRole.ADMIN,
-                    is_active=True,
-                    is_verified=True,
-                )
-                db.add(test_admin)
-                try:
-                    db.commit()
-                    db.refresh(test_admin)
-                except Exception:
-                    db.rollback()
-            return test_admin
 
-        # Remote / unverified client access fails closed with HTTP 403 Forbidden
-        if request.client and not is_loopback_address(request.client.host):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=(
-                    f"Access restricted to local administrative loopback interface (127.0.0.1 / ::1). "
-                    f"Remote host '{request.client.host}' is unauthorized."
-                ),
-            )
-
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authentication credentials were not provided.",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    if not token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Bearer token missing or empty.",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    # Cryptographically decode and verify access token
+def _authenticate_access_token(token: str, db: Session) -> User:
+    """Decode and validate an access JWT token and return its active User record."""
     payload = decode_token(token, expected_type="access")
     user_id_raw = payload.get("sub")
     if not user_id_raw:
@@ -173,6 +143,75 @@ def get_current_user(
         )
 
     return user
+
+
+def get_optional_user(
+    db: Session = Depends(get_db),
+    bearer_auth: Optional[HTTPAuthorizationCredentials] = Depends(bearer_security),
+    authorization: Optional[str] = Header(None, alias="Authorization"),
+) -> Optional[User]:
+    """
+    Extract and verify authenticated user ONLY when a Bearer token is supplied.
+    Returns None for unauthenticated requests (never triggers legacy loopback admin bypass).
+    """
+    token = _extract_bearer_token(bearer_auth, authorization)
+    if not token:
+        return None
+    return _authenticate_access_token(token, db)
+
+
+def get_current_user(
+    request: Request,
+    db: Session = Depends(get_db),
+    bearer_auth: Optional[HTTPAuthorizationCredentials] = Depends(bearer_security),
+    authorization: Optional[str] = Header(None, alias="Authorization"),
+) -> User:
+    """
+    FastAPI dependency extracting and verifying the authenticated user from the Bearer JWT token.
+    Supports OpenAPI HTTPBearer authorization scheme as well as raw Authorization headers.
+    Enforces active account status and fail-closed security.
+    """
+    token = _extract_bearer_token(bearer_auth, authorization)
+
+    if not token:
+        # Check for legacy test client compatibility
+        if _is_legacy_test_client(request):
+            # Return an administrative test user for legacy test execution
+            test_admin = db.query(User).filter(User.email == "test_admin@shopsense.internal").first()
+            if not test_admin:
+                test_admin = User(
+                    id=9999,
+                    email="test_admin@shopsense.internal",
+                    hashed_password="test_hashed_password",
+                    role=UserRole.ADMIN,
+                    is_active=True,
+                    is_verified=True,
+                )
+                db.add(test_admin)
+                try:
+                    db.commit()
+                    db.refresh(test_admin)
+                except Exception:
+                    db.rollback()
+            return test_admin
+
+        # Remote / unverified client access fails closed with HTTP 403 Forbidden
+        if request.client and not is_loopback_address(request.client.host):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    f"Access restricted to local administrative loopback interface (127.0.0.1 / ::1). "
+                    f"Remote host '{request.client.host}' is unauthorized."
+                ),
+            )
+
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication credentials were not provided.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    return _authenticate_access_token(token, db)
 
 
 def require_authenticated_user(current_user: User = Depends(get_current_user)) -> User:

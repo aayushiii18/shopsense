@@ -12,6 +12,8 @@ from app.database import get_db
 from app.models.user import User
 from app.schemas.auth_schema import (
     UserRegisterRequest,
+    VendorRegisterRequest,
+    VendorRegisterResponse,
     UserLoginRequest,
     RefreshTokenRequest,
     ChangePasswordRequest,
@@ -47,6 +49,20 @@ def register_customer(payload: UserRegisterRequest, db: Session = Depends(get_db
     """
     user = AuthService.register_customer(db, payload)
     return user
+
+
+@router.post(
+    "/register-vendor",
+    response_model=VendorRegisterResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Public vendor application and account registration",
+)
+def register_vendor(payload: VendorRegisterRequest, db: Session = Depends(get_db)):
+    """
+    Register a new vendor store and linked VENDOR user atomically.
+    Enforces PENDING_APPROVAL status pending administrator verification.
+    """
+    return AuthService.register_vendor(db, payload)
 
 
 @router.post(

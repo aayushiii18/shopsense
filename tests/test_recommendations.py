@@ -19,7 +19,7 @@ from app.models.customer_interaction import CustomerInteraction
 
 
 def _seed_recommendation_data(db_session):
-    v = Vendor(name="Test Vendor", email="v_rec@test.com", phone="+91-9876543210")
+    v = Vendor(name="Test Vendor", email="v_rec@test.com", phone="+91-9876543210", status="ACTIVE")
     db_session.add(v)
     db_session.flush()
 

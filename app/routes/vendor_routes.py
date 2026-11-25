@@ -9,6 +9,7 @@ PUT  /vendors/{id}/status    Transition vendor lifecycle state (interim loopback
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
@@ -23,7 +24,7 @@ from app.schemas.vendor_schema import (
 )
 from app.services import vendor_service
 from app.core.dependencies import require_admin, require_vendor_or_admin, verify_vendor_tenant, get_current_user
-from app.models.user import User
+from app.models.user import User, UserRole
 
 router = APIRouter(prefix="/vendors", tags=["Vendors"])
 
@@ -32,14 +33,16 @@ router = APIRouter(prefix="/vendors", tags=["Vendors"])
     "/",
     response_model=VendorResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="Register a new vendor",
+    summary="Register a new vendor (Admin Only)",
+    dependencies=[Depends(require_admin)],
 )
 def create_vendor(payload: VendorCreate, db: Session = Depends(get_db)):
     """
-    Register a new vendor on the platform.
+    Register a new vendor on the platform (Administrator endpoint).
     New vendors are enrolled in PENDING_APPROVAL with assigned commission tier.
+    Self-service vendor onboarding uses POST /auth/register-vendor.
     """
-    existing = db.query(Vendor).filter(Vendor.email == payload.email).first()
+    existing = db.query(Vendor).filter(func.lower(Vendor.email) == payload.email.lower()).first()
     if existing:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -48,14 +51,16 @@ def create_vendor(payload: VendorCreate, db: Session = Depends(get_db)):
 
     tier = payload.commission_tier or "TIER_STANDARD"
     rate = VALID_COMMISSION_TIERS.get(tier, 0.12)
+    category_val = payload.business_type if payload.business_type is not None else payload.category
 
     vendor = Vendor(
         name=payload.name,
+        owner_name=payload.owner_name,
         email=payload.email,
         phone=payload.phone,
         address=payload.address,
         tax_id=payload.tax_id,
-        business_type=payload.business_type,
+        business_type=category_val,
         status="PENDING_APPROVAL",
         commission_tier=tier,
         commission_rate=rate,
@@ -77,7 +82,8 @@ def create_vendor(payload: VendorCreate, db: Session = Depends(get_db)):
 @router.get(
     "/",
     response_model=list[VendorResponse],
-    summary="List all vendors",
+    summary="List all vendors (Admin Only)",
+    dependencies=[Depends(require_admin)],
 )
 def list_vendors(
     skip: int = 0,
@@ -85,7 +91,7 @@ def list_vendors(
     status_filter: str | None = Query(default=None, alias="status", description="Filter by status"),
     db: Session = Depends(get_db),
 ):
-    """Return a paginated list of all registered vendors."""
+    """Return a paginated list of all registered vendors (Admin Only)."""
     if limit > 500:
         raise HTTPException(status_code=400, detail="limit cannot exceed 500.")
     query = db.query(Vendor)
@@ -95,12 +101,45 @@ def list_vendors(
 
 
 @router.get(
+    "/me",
+    response_model=VendorResponse,
+    summary="Get authenticated vendor's own profile & onboarding status",
+)
+def get_my_vendor_profile(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Return the Vendor record and onboarding/approval status linked to the
+    currently authenticated VENDOR user.
+    Permits pending, rejected, and suspended vendors to view their status and review notes.
+    """
+    if current_user.role != UserRole.VENDOR or current_user.vendor_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only authenticated VENDOR accounts with a linked vendor profile can access /vendors/me.",
+        )
+    vendor = db.query(Vendor).filter(Vendor.id == current_user.vendor_id).first()
+    if not vendor:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Vendor with id={current_user.vendor_id} not found.",
+        )
+    return vendor
+
+
+@router.get(
     "/{vendor_id}",
     response_model=VendorResponse,
-    summary="Get vendor by ID",
+    summary="Get vendor by ID (Admin or owning Vendor)",
 )
-def get_vendor(vendor_id: int, db: Session = Depends(get_db)):
-    """Return a single vendor record, or 404 if not found."""
+def get_vendor(
+    vendor_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_vendor_or_admin),
+):
+    """Return a single vendor record for an ADMIN or the owning VENDOR, or 404 if not found."""
+    verify_vendor_tenant(current_user, vendor_id)
     vendor = db.query(Vendor).filter(Vendor.id == vendor_id).first()
     if not vendor:
         raise HTTPException(
@@ -129,24 +168,44 @@ def update_vendor(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Vendor with id={vendor_id} not found.",
         )
-    if payload.email and payload.email != vendor.email:
-        conflict = db.query(Vendor).filter(Vendor.email == payload.email, Vendor.id != vendor_id).first()
+    if vendor.status == "TERMINATED":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Vendor id={vendor.id} is TERMINATED and cannot be modified.",
+        )
+    if payload.email and payload.email.lower() != vendor.email.lower():
+        conflict = db.query(Vendor).filter(
+            func.lower(Vendor.email) == payload.email.lower(),
+            Vendor.id != vendor_id,
+        ).first()
         if conflict:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"A vendor with email '{payload.email}' is already registered.",
             )
+        user_conflict = db.query(User).filter(
+            func.lower(User.email) == payload.email.lower(),
+            (User.vendor_id != vendor_id) | (User.vendor_id.is_(None)),
+        ).first()
+        if user_conflict:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"An account with email '{payload.email}' is already registered.",
+            )
         vendor.email = payload.email
     if payload.name:
         vendor.name = payload.name
+    if payload.owner_name is not None:
+        vendor.owner_name = payload.owner_name
     if payload.phone:
         vendor.phone = payload.phone
     if payload.address is not None:
         vendor.address = payload.address
     if payload.tax_id is not None:
         vendor.tax_id = payload.tax_id
-    if payload.business_type is not None:
-        vendor.business_type = payload.business_type
+    new_category = payload.business_type if payload.business_type is not None else payload.category
+    if new_category is not None:
+        vendor.business_type = new_category
 
     db.commit()
     db.refresh(vendor)

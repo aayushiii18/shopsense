@@ -25,15 +25,28 @@ VALID_COMPLIANCE = {"PENDING_REVIEW", "VERIFIED", "FLAGGED", "LEGACY_EXEMPT"}
 
 
 class VendorCreate(BaseModel):
-    """Schema used when a client registers a new vendor."""
+    """Schema used when registering a new vendor profile."""
 
     name: str
+    owner_name: str | None = None
     email: EmailStr
     phone: str
     address: str | None = None
     tax_id: str | None = None
     business_type: str | None = None
+    category: str | None = None
     commission_tier: str = "TIER_STANDARD"
+
+    @field_validator("owner_name")
+    @classmethod
+    def validate_owner_name(cls, v: str | None) -> str | None:
+        if v is not None:
+            v = v.strip()
+            if not v:
+                return None
+            if len(v) > 150:
+                raise ValueError("Owner name must be 150 characters or fewer.")
+        return v
 
     @field_validator("email", mode="before")
     @classmethod
@@ -83,14 +96,27 @@ class VendorCreate(BaseModel):
 
 
 class VendorUpdate(BaseModel):
-    """Schema used when updating an existing vendor."""
+    """Schema used when updating an existing vendor profile (cannot alter approval/tier fields)."""
 
     name: str | None = None
+    owner_name: str | None = None
     email: EmailStr | None = None
     phone: str | None = None
     address: str | None = None
     tax_id: str | None = None
     business_type: str | None = None
+    category: str | None = None
+
+    @field_validator("owner_name")
+    @classmethod
+    def validate_owner_name(cls, v: str | None) -> str | None:
+        if v is not None:
+            v = v.strip()
+            if not v:
+                raise ValueError("Owner name must not be blank when provided.")
+            if len(v) > 150:
+                raise ValueError("Owner name must be 150 characters or fewer.")
+        return v
 
     @field_validator("email", mode="before")
     @classmethod
@@ -174,6 +200,7 @@ class VendorResponse(BaseModel):
 
     id: int
     name: str
+    owner_name: str | None = None
     email: str
     phone: str
     address: str | None
@@ -183,5 +210,6 @@ class VendorResponse(BaseModel):
     compliance_status: str = "PENDING_REVIEW"
     tax_id: str | None = None
     business_type: str | None = None
+    vendor_category: str | None = None
     verification_notes: str | None = None
     created_at: datetime

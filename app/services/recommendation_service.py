@@ -20,6 +20,7 @@ from app.models.vendor import Vendor
 from app.models.customer import Customer
 from app.models.transaction import Transaction
 from app.models.customer_interaction import CustomerInteraction
+from app.services.vendor_service import OPERATIONAL_VENDOR_STATUSES
 
 
 def _load_interaction_dataframe(db: Session) -> pd.DataFrame:
@@ -74,6 +75,7 @@ def get_popular_products(db: Session, top_n: int = 5) -> list[dict]:
             func.coalesce(func.sum(Transaction.quantity), 0).label("units_sold"),
         )
         .join(Vendor, Product.vendor_id == Vendor.id)
+        .filter(Vendor.status.in_(OPERATIONAL_VENDOR_STATUSES))
         .outerjoin(Transaction, Product.id == Transaction.product_id)
         .group_by(Product.id, Vendor.name)
         .order_by(func.coalesce(func.sum(Transaction.quantity), 0).desc(), Product.id.asc())
@@ -180,10 +182,13 @@ def get_personalized_recommendations(
     cust_profile = user_profiles.get(customer_id, {})
     interacted_products = {p for p, w in cust_profile.items() if w > 0}
 
-    # Fetch catalog products
+    # Fetch catalog products strictly from operational (approved) vendors
     all_products = {
         p.id: p
-        for p in db.query(Product).join(Vendor, Product.vendor_id == Vendor.id).all()
+        for p in db.query(Product)
+        .join(Vendor, Product.vendor_id == Vendor.id)
+        .filter(Vendor.status.in_(OPERATIONAL_VENDOR_STATUSES))
+        .all()
     }
 
     # Candidate scoring: for each unrated product j, sum_i (sim(i, j) * rating_i) / sum_i (sim(i, j))

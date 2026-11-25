@@ -56,6 +56,7 @@ def initialize_database():
     from app.database import engine, Base, SessionLocal
     import app.models  # Registers all 16 models
     from migrate_stage7 import run_migration as run_stage7_migration
+    from migrate_vendor_onboarding import run_migration as run_vendor_onboarding_migration
     from app.models.vendor import Vendor
     from app.models.etl import DailySalesMart
     from bootstrap_admin import bootstrap_admin_user
@@ -65,13 +66,14 @@ def initialize_database():
     Base.metadata.create_all(bind=engine)
     logger.info("Base tables verified.")
 
-    # 2. Stage 7 migration check (users, refresh_tokens, token_version)
+    # 2. Stage 7 & Vendor Onboarding migration checks
     logger.info("Executing Stage 7 migration check...")
     try:
         run_stage7_migration()
-        logger.info("Stage 7 migrations verified.")
+        run_vendor_onboarding_migration()
+        logger.info("Stage 7 and vendor onboarding migrations verified.")
     except Exception as e:
-        logger.warning("Stage 7 migration check returned: %s", e)
+        logger.warning("Migration check returned: %s", e)
 
     # 3. Check existing data / fresh database initialization
     db = SessionLocal()

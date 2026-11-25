@@ -24,7 +24,10 @@ VALID_VENDOR = {
 def _create_vendor(client):
     resp = client.post("/vendors/", json=VALID_VENDOR)
     assert resp.status_code == 201
-    return resp.json()["id"]
+    vendor_id = resp.json()["id"]
+    status_resp = client.put(f"/vendors/{vendor_id}/status", json={"status": "ACTIVE"})
+    assert status_resp.status_code == 200
+    return vendor_id
 
 
 def _valid_product(vendor_id: int):

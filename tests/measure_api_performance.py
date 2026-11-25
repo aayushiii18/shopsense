@@ -51,9 +51,9 @@ def benchmark():
     endpoints = [
         # Sales API
         ("Sales API", "GET /analytics/revenue", "/analytics/revenue", {}),
-        ("Sales API", "GET /analytics/vendor-performance", "/analytics/vendor-performance", {}),
+        ("Sales API", "GET /analytics/vendor-performance", "/analytics/vendor-performance", admin_headers),
         ("Sales API", "GET /analytics/revenue/total", "/analytics/revenue/total", {}),
-        ("Sales API", "GET /analytics/revenue/by-vendor", "/analytics/revenue/by-vendor", {}),
+        ("Sales API", "GET /analytics/revenue/by-vendor", "/analytics/revenue/by-vendor", admin_headers),
         ("Sales API", "GET /analytics/revenue/by-product", "/analytics/revenue/by-product", {}),
         ("Sales API", "GET /analytics/top-selling-product", "/analytics/top-selling-product", {}),
         ("Sales API", "GET /analytics/summary", "/analytics/summary", {}),

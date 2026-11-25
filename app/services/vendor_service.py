@@ -17,7 +17,10 @@ from sqlalchemy.orm import Session
 from fastapi import HTTPException, status
 
 from app.models.vendor import Vendor
+from app.models.user import User
 from app.schemas.vendor_schema import VALID_COMMISSION_TIERS
+
+OPERATIONAL_VENDOR_STATUSES = {"ACTIVE", "LEGACY_ACTIVE"}
 
 ALLOWED_TRANSITIONS = {
     "PENDING_APPROVAL": {"ACTIVE", "REJECTED"},
@@ -79,18 +82,44 @@ def transition_vendor_status(
         vendor.commission_tier = commission_tier
         vendor.commission_rate = VALID_COMMISSION_TIERS[commission_tier]
 
+    # Sync linked vendor User verification status cleanly without deactivating login access
+    # so PENDING_APPROVAL/REJECTED/SUSPENDED vendors can inspect /vendors/me feedback.
+    is_operational = vendor.status in OPERATIONAL_VENDOR_STATUSES
+    linked_users = db.query(User).filter(User.vendor_id == vendor.id).all()
+    for user in linked_users:
+        user.is_verified = is_operational
+
     db.commit()
     db.refresh(vendor)
     return vendor
 
 
+def verify_vendor_is_operational(vendor: Vendor, action: str = "list products") -> None:
+    """
+    Centralized operational status guard:
+    Only ACTIVE and LEGACY_ACTIVE vendors may perform marketplace operations
+    such as listing/updating products or recording inventory movements.
+    """
+    if vendor.status not in OPERATIONAL_VENDOR_STATUSES:
+        if action == "list products":
+            detail = (
+                f"Vendor id={vendor.id} is in status '{vendor.status}'. "
+                "Inactive vendors cannot list products."
+            )
+        else:
+            detail = (
+                f"Vendor id={vendor.id} is in status '{vendor.status}'. "
+                f"Only approved vendors (ACTIVE or LEGACY_ACTIVE) can {action}."
+            )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=detail,
+        )
+
+
 def verify_vendor_can_list_products(vendor: Vendor) -> None:
     """
     Enforces business restriction:
-    Suspended, Terminated, or Rejected vendors cannot list new products.
+    Pending, Rejected, Suspended, and Terminated vendors cannot list or update products.
     """
-    if vendor.status in {"SUSPENDED", "TERMINATED", "REJECTED"}:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Vendor id={vendor.id} is in status '{vendor.status}'. Inactive vendors cannot list products.",
-        )
+    verify_vendor_is_operational(vendor, action="list products")

@@ -17,19 +17,24 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.product import Product
+from app.models.vendor import Vendor
 from app.models.user import User, UserRole
-from app.core.dependencies import get_current_user, verify_vendor_tenant
+from app.core.dependencies import get_current_user, require_vendor_or_admin, verify_vendor_tenant
 from app.schemas.inventory_schema import StockMovementCreate
-from app.services import inventory_service
+from app.services import inventory_service, vendor_service
 
 router = APIRouter(prefix="/analytics/inventory", tags=["Inventory Analytics"])
 movement_router = APIRouter(prefix="/inventory", tags=["Inventory Operations"])
 
 
 @router.get("/status", summary="Real-time Inventory Status & Valuation")
-def inventory_status(db: Session = Depends(get_db)):
-    """Returns catalog inventory stock levels, valuations, and status indicators."""
-    return inventory_service.get_inventory_status(db)
+def inventory_status(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_vendor_or_admin),
+):
+    """Returns catalog inventory stock levels, valuations, and status indicators (tenant-scoped for VENDOR)."""
+    vendor_id = current_user.vendor_id if current_user.role == UserRole.VENDOR else None
+    return inventory_service.get_inventory_status(db, vendor_id=vendor_id)
 
 
 @router.get("/movements", summary="Stock Movement Audit Trail")
@@ -38,10 +43,12 @@ def list_movements(
     movement_type: Optional[str] = Query(None, description="Filter by movement type"),
     limit: int = Query(100, ge=1, le=1000),
     db: Session = Depends(get_db),
+    current_user: User = Depends(require_vendor_or_admin),
 ):
-    """Returns historical stock movements."""
+    """Returns historical stock movements (tenant-scoped for VENDOR)."""
+    vendor_id = current_user.vendor_id if current_user.role == UserRole.VENDOR else None
     return inventory_service.get_stock_movements(
-        db, product_id=product_id, movement_type=movement_type, limit=limit
+        db, product_id=product_id, movement_type=movement_type, limit=limit, vendor_id=vendor_id
     )
 
 
@@ -54,7 +61,7 @@ def create_movement(
     """
     Records an inventory stock movement (RESTOCK, SALE, ADJUSTMENT, TRANSFER, RETURN)
     and updates the active product inventory accordingly.
-    Enforces tenant isolation for VENDOR users.
+    Enforces tenant isolation and approved/operational vendor status for VENDOR operations.
     """
     if current_user.role not in (UserRole.ADMIN, UserRole.VENDOR):
         raise HTTPException(
@@ -62,15 +69,23 @@ def create_movement(
             detail="Vendor or Administrative privileges required to record stock movements.",
         )
 
+    prod = db.query(Product).filter(Product.id == payload.product_id).first()
+    if not prod:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Product with id={payload.product_id} not found.",
+        )
+
     if current_user.role == UserRole.VENDOR:
-        prod = db.query(Product).filter(Product.id == payload.product_id).first()
-        if prod:
-            verify_vendor_tenant(current_user, prod.vendor_id)
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Product with id={payload.product_id} not found.",
-            )
+        verify_vendor_tenant(current_user, prod.vendor_id)
+
+    vendor = db.query(Vendor).filter(Vendor.id == prod.vendor_id).first()
+    if not vendor:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Vendor with id={prod.vendor_id} not found.",
+        )
+    vendor_service.verify_vendor_is_operational(vendor, action="record inventory stock movements")
 
     try:
         movement = inventory_service.record_stock_movement(

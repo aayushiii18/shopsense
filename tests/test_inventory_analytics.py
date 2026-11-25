@@ -20,7 +20,7 @@ from app.models.stock_movement import StockMovement
 
 
 def _seed_basic_catalog(db_session):
-    v = Vendor(name="Test Vendor", email="v1@test.com", phone="+91-9999999991")
+    v = Vendor(name="Test Vendor", email="v1@test.com", phone="+91-9999999991", status="ACTIVE")
     db_session.add(v)
     db_session.flush()
 

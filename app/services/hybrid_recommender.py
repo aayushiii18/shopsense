@@ -28,6 +28,7 @@ from app.models.vendor import Vendor
 from app.models.inventory import Inventory
 from app.models.customer_interaction import CustomerInteraction
 from app.services.catalog_normalizer import normalize_product_catalog
+from app.services.vendor_service import OPERATIONAL_VENDOR_STATUSES
 
 # Global in-memory cache for models
 _HYBRID_CACHE: Dict[str, Any] = {}
@@ -120,9 +121,15 @@ def get_hybrid_recommendations(
     if not customer:
         raise ValueError(f"Customer with id={customer_id} not found.")
 
+    # Restrict recommendations strictly to approved / operational vendors
+    operational_vendors = {
+        v.id: v.name
+        for v in db.query(Vendor).filter(Vendor.status.in_(OPERATIONAL_VENDOR_STATUSES)).all()
+    }
+
     # Fetch catalog and stock levels
     catalog = normalize_product_catalog(db)
-    prod_meta = catalog.get("products", [])
+    prod_meta = [p for p in catalog.get("products", []) if p.get("vendor_id") in operational_vendors]
     products_by_id = {p["product_id"]: p for p in prod_meta}
     all_product_ids = list(products_by_id.keys())
 
@@ -150,7 +157,7 @@ def get_hybrid_recommendations(
     cb_sim, id_to_idx, idx_to_id = _build_content_similarity_matrix(prod_meta)
     cf_sim, pop_scores = _build_cf_similarity_matrix(df_ix, all_product_ids)
 
-    vendors = {v.id: v.name for v in db.query(Vendor).all()}
+    vendors = operational_vendors
 
     # Check for cold start
     is_cold_start = user_ix.empty or len(user_interacted_pids) == 0

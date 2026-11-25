@@ -16,6 +16,8 @@ from datetime import datetime
 from typing import Optional, List, Dict, Any
 
 from fastapi import HTTPException, status
+from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import ACCESS_TOKEN_EXPIRE_MINUTES
@@ -33,6 +35,8 @@ from app.models.vendor import Vendor
 from app.models.customer import Customer
 from app.schemas.auth_schema import (
     UserRegisterRequest,
+    VendorRegisterRequest,
+    VendorRegisterResponse,
     AdminCreateUserRequest,
     AdminUpdateUserStatusRequest,
     AdminUpdateUserRoleRequest,
@@ -103,6 +107,100 @@ class AuthService:
         db.refresh(user)
         logger.info("New customer user registered: id=%s email=%s", user.id, user.email)
         return user
+
+    @staticmethod
+    def register_vendor(db: Session, req: VendorRegisterRequest) -> VendorRegisterResponse:
+        """
+        Public self-service vendor registration creating Vendor (PENDING_APPROVAL) + User (VENDOR) atomically.
+        Guarantees:
+        - Enforces password confirmation equality.
+        - Checks duplicate email across both 'users' and 'vendors'.
+        - Forces role=VENDOR, status=PENDING_APPROVAL, compliance_status=PENDING_REVIEW server-side.
+        - Rolls back atomically if any step fails so partial registration cannot occur.
+        """
+        if req.password != req.password_confirmation:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Password and password confirmation do not match.",
+            )
+
+        email_clean = req.email.strip().lower()
+        existing_user = db.query(User).filter(func.lower(User.email) == email_clean).first()
+        existing_vendor = db.query(Vendor).filter(func.lower(Vendor.email) == email_clean).first()
+        if existing_user or existing_vendor:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="An account or vendor profile with this email address is already registered.",
+            )
+
+        now = datetime.utcnow()
+        password_hash = hash_password(req.password)
+
+        try:
+            vendor = Vendor(
+                name=req.business_name.strip(),
+                owner_name=req.owner_name.strip(),
+                email=email_clean,
+                phone=req.phone.strip(),
+                address=req.address,
+                tax_id=req.tax_id,
+                business_type=req.category.strip(),
+                status="PENDING_APPROVAL",
+                commission_tier="TIER_STANDARD",
+                commission_rate=0.12,
+                compliance_status="PENDING_REVIEW",
+            )
+            db.add(vendor)
+            db.flush()  # Assign vendor.id within single atomic transaction
+
+            user = User(
+                email=email_clean,
+                hashed_password=password_hash,
+                role=UserRole.VENDOR,
+                vendor_id=vendor.id,
+                customer_id=None,
+                is_active=True,       # Allows login to inspect status/verification notes
+                is_verified=False,    # Verified upon administrator approval
+                token_version=1,
+                created_at=now,
+                updated_at=now,
+            )
+            db.add(user)
+            db.commit()
+            db.refresh(vendor)
+            db.refresh(user)
+        except IntegrityError:
+            db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="An account or vendor profile with this email address already exists.",
+            )
+        except Exception:
+            db.rollback()
+            raise
+
+        logger.info(
+            "New vendor application registered atomically: user_id=%s vendor_id=%s email=%s status=%s",
+            user.id,
+            vendor.id,
+            user.email,
+            vendor.status,
+        )
+        return VendorRegisterResponse(
+            user_id=user.id,
+            vendor_id=vendor.id,
+            email=user.email,
+            role=user.role,
+            owner_name=vendor.owner_name or req.owner_name.strip(),
+            business_name=vendor.name,
+            category=vendor.business_type or req.category.strip(),
+            tax_id=vendor.tax_id,
+            vendor_status=vendor.status,
+            compliance_status=vendor.compliance_status,
+            is_active=bool(user.is_active),
+            is_verified=bool(user.is_verified),
+            message="Vendor registration submitted and is pending administrator approval.",
+        )
 
     @staticmethod
     def authenticate_user(db: Session, email: str, password: str) -> User:

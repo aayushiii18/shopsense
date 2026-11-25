@@ -29,7 +29,7 @@ from app.schemas.revenue_schema import (
     RegionalRevenueResponse,
     VendorSettlementResponse,
 )
-from app.core.dependencies import require_vendor_or_admin
+from app.core.dependencies import require_admin, require_vendor_or_admin
 from app.models.user import User, UserRole
 
 router = APIRouter(tags=["Sales API", "Revenue & Vendor Analytics"])
@@ -50,9 +50,13 @@ def revenue_analysis(db: Session = Depends(get_db)):
     response_model=List[VendorPerformanceItem],
     summary="Vendor Sales Performance Aggregation",
 )
-def vendor_performance(db: Session = Depends(get_db)):
-    """Returns total revenue and units sold grouped by vendor."""
-    return revenue_service.get_vendor_performance(db)
+def vendor_performance(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_vendor_or_admin),
+):
+    """Returns total revenue and units sold grouped by vendor (tenant-scoped for VENDOR)."""
+    vendor_id = current_user.vendor_id if current_user.role == UserRole.VENDOR else None
+    return revenue_service.get_vendor_performance(db, vendor_id=vendor_id)
 
 
 @router.get(
@@ -68,7 +72,8 @@ def revenue_growth(db: Session = Depends(get_db)):
 @router.get(
     "/analytics/revenue/benchmarking",
     response_model=VendorBenchmarkResponse,
-    summary="Marketplace Vendor Revenue Benchmarking & Market Share",
+    summary="Marketplace Vendor Revenue Benchmarking & Market Share (Admin Only)",
+    dependencies=[Depends(require_admin)],
 )
 def vendor_benchmarking(db: Session = Depends(get_db)):
     """Returns ranked vendor benchmarking with total revenue, units sold, order count, and market share."""

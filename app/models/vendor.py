@@ -7,7 +7,7 @@ Includes lifecycle status, commission tier, and compliance fields.
 
 from datetime import datetime
 from sqlalchemy import Integer, String, Float, DateTime, func
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship, synonym
 from app.database import Base
 
 
@@ -16,6 +16,7 @@ class Vendor(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     name: Mapped[str] = mapped_column(String(150), nullable=False)
+    owner_name: Mapped[str | None] = mapped_column(String(150), nullable=True)
     email: Mapped[str] = mapped_column(String(254), unique=True, nullable=False, index=True)
     phone: Mapped[str] = mapped_column(String(20), nullable=False)
     address: Mapped[str | None] = mapped_column(String(400), nullable=True)
@@ -30,6 +31,7 @@ class Vendor(Base):
     )
     tax_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     business_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    vendor_category = synonym("business_type")
     compliance_status: Mapped[str] = mapped_column(
         String(50), default="PENDING_REVIEW", nullable=False
     )

@@ -73,15 +73,16 @@ def get_total_revenue(db: Session) -> Dict[str, float]:
     return {"total_revenue": calculate_gmv(db)}
 
 
-def get_vendor_performance(db: Session) -> List[Dict[str, Any]]:
+def get_vendor_performance(db: Session, vendor_id: Optional[int] = None) -> List[Dict[str, Any]]:
     """
     Aggregates vendor sales performance across all transactions.
-    Returns list of vendor-wise revenue and unit counts.
+    Optionally scoped to vendor_id with tenant-isolated cache keys.
     """
-    cached = _get_cached_rev("vendor_performance", 20.0)
+    cache_key = f"vendor_performance_{vendor_id if vendor_id is not None else 'all'}"
+    cached = _get_cached_rev(cache_key, 20.0)
     if cached is not None:
         return cached
-    rows = (
+    query = (
         db.query(
             Transaction.vendor_id,
             Vendor.name.label("vendor_name"),
@@ -89,7 +90,11 @@ def get_vendor_performance(db: Session) -> List[Dict[str, Any]]:
             func.coalesce(func.sum(Transaction.quantity), 0).label("units_sold"),
         )
         .outerjoin(Vendor, Transaction.vendor_id == Vendor.id)
-        .group_by(Transaction.vendor_id, Vendor.name)
+    )
+    if vendor_id is not None:
+        query = query.filter(Transaction.vendor_id == vendor_id)
+    rows = (
+        query.group_by(Transaction.vendor_id, Vendor.name)
         .order_by(func.sum(Transaction.amount).desc())
         .all()
     )
@@ -106,7 +111,7 @@ def get_vendor_performance(db: Session) -> List[Dict[str, Any]]:
         }
         for r in rows
     ]
-    _set_cached_rev("vendor_performance", result)
+    _set_cached_rev(cache_key, result)
     return result
 
 
