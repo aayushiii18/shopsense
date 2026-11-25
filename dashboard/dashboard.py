@@ -106,14 +106,33 @@ def api_get(path: str, timeout: float = 1.0):
         return None
 
 
+def _format_api_error(resp) -> str:
+    """Extract clean human-readable error message from FastAPI JSON or text error response."""
+    try:
+        body = resp.json()
+        detail = body.get("detail", resp.text)
+        if isinstance(detail, list):
+            msgs = []
+            for item in detail:
+                if isinstance(item, dict):
+                    loc = ".".join(str(x) for x in item.get("loc", []) if x != "body")
+                    msg = item.get("msg", str(item))
+                    msgs.append(f"{loc}: {msg}" if loc else msg)
+                else:
+                    msgs.append(str(item))
+            return f"HTTP {resp.status_code}: {'; '.join(msgs)}"
+        return f"HTTP {resp.status_code}: {detail}"
+    except Exception:
+        return f"HTTP {resp.status_code}: {resp.text}"
+
+
 def api_post(path: str, payload: dict, timeout: int = 8):
     """Safe POST helper returning (response_json, error_message)."""
     try:
         resp = requests.post(f"{API_BASE}{path}", json=payload, headers=_auth_headers(), timeout=timeout)
         if resp.status_code in [200, 201]:
             return resp.json(), None
-        error_detail = resp.json().get("detail", resp.text)
-        return None, f"HTTP {resp.status_code}: {error_detail}"
+        return None, _format_api_error(resp)
     except Exception as e:
         return None, f"Connection failed: {str(e)}"
 
@@ -124,10 +143,102 @@ def api_put(path: str, payload: dict, timeout: int = 8):
         resp = requests.put(f"{API_BASE}{path}", json=payload, headers=_auth_headers(), timeout=timeout)
         if resp.status_code in [200, 201]:
             return resp.json(), None
-        error_detail = resp.json().get("detail", resp.text)
-        return None, f"HTTP {resp.status_code}: {error_detail}"
+        return None, _format_api_error(resp)
     except Exception as e:
         return None, f"Connection failed: {str(e)}"
+
+
+OPERATIONAL_VENDOR_STATUSES = {"ACTIVE", "LEGACY_ACTIVE"}
+
+VENDOR_CATEGORY_OPTIONS = [
+    "Electronics",
+    "Apparel",
+    "Home & Kitchen",
+    "Home Decor",
+    "Beauty & Personal Care",
+    "Sports & Fitness",
+    "Books & Stationery",
+    "Grocery & Gourmet",
+    "General Retail",
+    "Other",
+]
+
+VENDOR_STATUS_META = {
+    "PENDING_APPROVAL": (
+        "badge-warning",
+        "⏳ PENDING APPROVAL",
+        "Your vendor application is pending administrator review. Storefront visibility, catalog edits, and stock movements remain locked until approved.",
+    ),
+    "ACTIVE": (
+        "badge-healthy",
+        "✅ ACTIVE",
+        "Your vendor account is approved and active. Product catalog and inventory management controls are enabled.",
+    ),
+    "LEGACY_ACTIVE": (
+        "badge-healthy",
+        "✅ LEGACY ACTIVE",
+        "Your legacy vendor account is operational. Product catalog and inventory management controls are enabled.",
+    ),
+    "REJECTED": (
+        "badge-critical",
+        "❌ REJECTED",
+        "Your vendor application was rejected by an administrator. Review the verification feedback below before requesting re-review.",
+    ),
+    "SUSPENDED": (
+        "badge-warning",
+        "⚠️ SUSPENDED",
+        "Your vendor account is temporarily suspended. Product creation, updates, and stock movements are restricted.",
+    ),
+    "TERMINATED": (
+        "badge-critical",
+        "⛔ TERMINATED",
+        "Your vendor account has been permanently terminated. All marketplace operations and profile edits are locked.",
+    ),
+}
+
+
+def _format_validation_error(exc: Exception) -> str:
+    """Convert Pydantic ValidationError or HTTPException into concise UI error text."""
+    if hasattr(exc, "detail"):
+        return str(getattr(exc, "detail"))
+    if hasattr(exc, "errors"):
+        try:
+            parts = []
+            for e in exc.errors():
+                loc = ".".join(str(x) for x in e.get("loc", []) if x != "body")
+                msg = e.get("msg", str(e))
+                parts.append(f"{loc}: {msg}" if loc else msg)
+            return "; ".join(parts)
+        except Exception:
+            pass
+    return str(exc)
+
+
+def submit_vendor_registration(payload: dict) -> tuple[dict | None, str | None]:
+    """
+    Submit vendor registration to POST /auth/register-vendor.
+    Falls back to AuthService.register_vendor only when HTTP API is unreachable.
+    """
+    res, err = api_post("/auth/register-vendor", payload)
+    if res is not None:
+        return res, None
+    if err and not err.startswith("Connection failed:"):
+        return None, err
+
+    try:
+        from app.database import SessionLocal
+        from app.schemas.auth_schema import VendorRegisterRequest
+        from app.services.auth.auth_service import AuthService
+
+        db = SessionLocal()
+        try:
+            req = VendorRegisterRequest(**payload)
+            out = AuthService.register_vendor(db, req)
+            return out.model_dump() if hasattr(out, "model_dump") else dict(out), None
+        finally:
+            db.close()
+    except Exception as exc:
+        return None, _format_validation_error(exc)
 
 
 # ── Page Configuration ────────────────────────────────────────────────────────
@@ -269,7 +380,7 @@ with st.sidebar:
             st.rerun()
     else:
         with st.expander("🔐 Sign In / Register", expanded=False):
-            auth_tab_login, auth_tab_reg = st.tabs(["Sign In", "Register"])
+            auth_tab_login, auth_tab_reg, auth_tab_vendor_reg = st.tabs(["Sign In", "Register", "Register as Vendor"])
             with auth_tab_login:
                 with st.form("sidebar_login_form"):
                     login_email = st.text_input("Email", placeholder="user@shopsense.com")
@@ -291,6 +402,8 @@ with st.sidebar:
                                 }
                                 st.success("Signed in successfully!")
                                 st.rerun()
+                            elif err and not err.startswith("Connection failed:"):
+                                st.error(f"Sign-in failed: {err}")
                             else:
                                 try:
                                     from app.database import SessionLocal
@@ -326,6 +439,8 @@ with st.sidebar:
                             resp, err = api_post("/auth/register", {"email": reg_email, "password": reg_pass})
                             if resp and "id" in resp:
                                 st.success("Account created! Please sign in.")
+                            elif err and not err.startswith("Connection failed:"):
+                                st.error(f"Registration failed: {err}")
                             else:
                                 try:
                                     from app.database import SessionLocal
@@ -339,6 +454,54 @@ with st.sidebar:
                                         fallback_db.close()
                                 except Exception as fallback_err:
                                     st.error(f"Registration failed: {err or str(fallback_err)}")
+
+            with auth_tab_vendor_reg:
+                st.caption("Vendor Application — submit your business details for admin review.")
+                with st.form("sidebar_vendor_register_form"):
+                    vreg_owner = st.text_input("Owner Name*", placeholder="e.g. Asha Mehta", key="vreg_owner")
+                    vreg_biz = st.text_input("Business / Store Name*", placeholder="e.g. Mehta Artisans", key="vreg_biz")
+                    vreg_email = st.text_input("Email*", placeholder="owner@store.com", key="vreg_email")
+                    vreg_phone = st.text_input("Phone Number*", placeholder="+91-9876543210", key="vreg_phone")
+                    vreg_cat = st.selectbox(
+                        "Vendor Category*",
+                        options=VENDOR_CATEGORY_OPTIONS,
+                        key="vreg_cat",
+                    )
+                    vreg_cat_other = st.text_input(
+                        "Custom Category (if Other)",
+                        placeholder="Specify business category",
+                        key="vreg_cat_other",
+                    )
+                    vreg_tax = st.text_input("Tax / GST ID (Optional)", placeholder="e.g. 27AAACM1234F1Z5", key="vreg_tax")
+                    vreg_pw = st.text_input("Password*", type="password", key="vreg_pw")
+                    vreg_pw2 = st.text_input("Confirm Password*", type="password", key="vreg_pw2")
+                    vreg_submitted = st.form_submit_button("Submit Vendor Application", use_container_width=True)
+
+                    if vreg_submitted:
+                        chosen_cat = (vreg_cat_other or "").strip() if vreg_cat == "Other" else vreg_cat
+                        vreg_payload = {
+                            "owner_name": (vreg_owner or "").strip(),
+                            "business_name": (vreg_biz or "").strip(),
+                            "email": (vreg_email or "").strip(),
+                            "phone": (vreg_phone or "").strip(),
+                            "category": chosen_cat,
+                            "tax_id": (vreg_tax or "").strip() or None,
+                            "password": vreg_pw or "",
+                            "password_confirmation": vreg_pw2 or "",
+                        }
+                        reg_res, reg_err = submit_vendor_registration(vreg_payload)
+                        if reg_res:
+                            st.success(
+                                f"Application submitted for **{reg_res.get('business_name')}** "
+                                f"(Vendor ID: `{reg_res.get('vendor_id')}`)."
+                            )
+                            st.info(
+                                f"Status: `{reg_res.get('vendor_status', 'PENDING_APPROVAL')}` — "
+                                "Your vendor application is **awaiting admin approval**. "
+                                "You may sign in to view your application status, while product and inventory controls remain locked until approved."
+                            )
+                        else:
+                            st.error(f"Vendor registration failed: {reg_err}")
 
     st.markdown("---")
 
@@ -410,22 +573,524 @@ with st.sidebar:
     st.caption("StockPilot v2.0 • Enterprise Edition")
 
 
-# Helper to get unified vendors list
+def _vendor_orm_to_dict(v) -> dict:
+    """Serialize Vendor ORM record into UI-compatible dictionary matching VendorResponse."""
+    return {
+        "id": v.id,
+        "name": v.name,
+        "owner_name": getattr(v, "owner_name", None),
+        "email": v.email,
+        "phone": v.phone,
+        "address": v.address,
+        "tax_id": v.tax_id,
+        "business_type": v.business_type,
+        "vendor_category": getattr(v, "vendor_category", v.business_type),
+        "status": v.status,
+        "commission_tier": v.commission_tier,
+        "commission_rate": float(v.commission_rate) if v.commission_rate is not None else 0.12,
+        "compliance_status": v.compliance_status,
+        "verification_notes": v.verification_notes,
+        "created_at": v.created_at.isoformat() if getattr(v, "created_at", None) else None,
+    }
+
+
+def is_vendor_operational(vendor_profile: dict | None) -> bool:
+    """Return True strictly when vendor status is ACTIVE or LEGACY_ACTIVE."""
+    return bool(vendor_profile and str(vendor_profile.get("status", "")).upper() in OPERATIONAL_VENDOR_STATUSES)
+
+
+def format_vendor_status_label(status_val: str | None) -> str:
+    """Format raw lifecycle code with clear visual badge prefix."""
+    st_code = str(status_val or "PENDING_APPROVAL").upper()
+    meta = VENDOR_STATUS_META.get(st_code)
+    return meta[1] if meta else st_code
+
+
+def fetch_my_vendor_profile() -> dict | None:
+    """
+    Fetch authenticated VENDOR user's own vendor record via GET /vendors/me.
+    Uses single-vendor DB lookup fallback strictly matching auth_user['vendor_id'] when offline.
+    """
+    if current_role != "VENDOR" or not auth_user:
+        return None
+    vid = auth_user.get("vendor_id")
+    if not vid:
+        return None
+
+    if is_live_api and _api_reachable_this_run and st.session_state.get("auth_token"):
+        me_res = api_get("/vendors/me")
+        if isinstance(me_res, dict) and me_res.get("id"):
+            return me_res
+
+    try:
+        from app.database import SessionLocal
+        from app.models.vendor import Vendor
+
+        db = SessionLocal()
+        try:
+            v = db.query(Vendor).filter(Vendor.id == int(vid)).first()
+            if v:
+                return _vendor_orm_to_dict(v)
+        finally:
+            db.close()
+    except Exception:
+        pass
+
+    if not csv_data["vendors"].empty:
+        matched = csv_data["vendors"][csv_data["vendors"]["id"] == int(vid)]
+        if not matched.empty:
+            return matched.iloc[0].to_dict()
+    return None
+
+
+def render_vendor_status_banner(vendor_profile: dict | None):
+    """Display prominent vendor approval status, feedback notes, and operational restrictions."""
+    if not vendor_profile:
+        st.warning("⚠️ Vendor profile could not be loaded. Please sign out and sign in again.")
+        return
+
+    st_code = str(vendor_profile.get("status", "PENDING_APPROVAL")).upper()
+    badge_cls, badge_lbl, desc = VENDOR_STATUS_META.get(
+        st_code,
+        ("badge-warning", st_code, "Review your current account status."),
+    )
+    notes = vendor_profile.get("verification_notes")
+    comp = vendor_profile.get("compliance_status", "PENDING_REVIEW")
+    cat = vendor_profile.get("vendor_category") or vendor_profile.get("business_type") or "Unassigned"
+    safe_name = html.escape(str(vendor_profile.get("name", "Your Store")))
+    safe_cat = html.escape(str(cat))
+    safe_comp = html.escape(str(comp))
+    safe_notes = html.escape(str(notes)) if notes else None
+
+    border_map = {
+        "PENDING_APPROVAL": "#f59e0b",
+        "ACTIVE": "#10b981",
+        "LEGACY_ACTIVE": "#10b981",
+        "REJECTED": "#ef4444",
+        "SUSPENDED": "#f59e0b",
+        "TERMINATED": "#ef4444",
+    }
+    border_hex = border_map.get(st_code, "#64748b")
+
+    st.markdown(
+        f"""
+        <div class="sp-card" style="border-left: 4px solid {border_hex};">
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+                <div>
+                    <div class="sp-card-title" style="margin-bottom:2px;">Vendor Approval Status — {safe_name}</div>
+                    <div style="font-size:0.95rem; color:#e2e8f0;">Category: <strong>{safe_cat}</strong> &bull; Compliance: <code>{safe_comp}</code></div>
+                </div>
+                <span class="sp-badge {badge_cls}" style="font-size:0.85rem;">{badge_lbl}</span>
+            </div>
+            <div style="margin-top:10px; font-size:0.9rem; color:#cbd5e1;">{desc}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    if st_code == "PENDING_APPROVAL":
+        st.warning(f"⏳ **Approval Pending:** {desc}")
+    elif st_code == "REJECTED":
+        msg = f"❌ **Application Rejected:** {desc}"
+        if safe_notes:
+            msg += f"\n\n**Rejection Feedback:** {notes}"
+        st.error(msg)
+    elif st_code == "SUSPENDED":
+        st.warning(f"⚠️ **Account Suspended:** {desc}" + (f" **Reason:** {notes}" if notes else ""))
+    elif st_code == "TERMINATED":
+        st.error(f"⛔ **Account Terminated:** {desc}" + (f" **Reason:** {notes}" if notes else ""))
+    elif st_code in OPERATIONAL_VENDOR_STATUSES:
+        st.success(f"✅ **Approved Vendor Status ({st_code}):** Storefront and operations are active.")
+        if notes:
+            st.info(f"📝 **Administrator Verification Notes:** {notes}")
+
+    if notes and st_code == "PENDING_APPROVAL":
+        st.info(f"📝 **Verification Notes:** {notes}")
+
+
+def transition_vendor_application_status(vendor_id: int, payload: dict) -> tuple[dict | None, str | None]:
+    """
+    Execute vendor status transition via PUT /vendors/{vendor_id}/status.
+    Falls back to vendor_service.transition_vendor_status only when HTTP API is unreachable.
+    """
+    res, err = api_put(f"/vendors/{vendor_id}/status", payload)
+    if res is not None:
+        return res, None
+    if err and not err.startswith("Connection failed:"):
+        return None, err
+
+    try:
+        from app.database import SessionLocal
+        from app.services import vendor_service
+
+        db = SessionLocal()
+        try:
+            updated = vendor_service.transition_vendor_status(
+                db=db,
+                vendor_id=int(vendor_id),
+                new_status=payload["status"],
+                notes=payload.get("verification_notes"),
+                compliance_status=payload.get("compliance_status"),
+                commission_tier=payload.get("commission_tier"),
+            )
+            return _vendor_orm_to_dict(updated), None
+        finally:
+            db.close()
+    except Exception as exc:
+        return None, _format_validation_error(exc)
+
+
+def update_vendor_profile_action(vendor_id: int, payload: dict) -> tuple[dict | None, str | None]:
+    """
+    Update vendor details via PUT /vendors/{vendor_id} (offline fallback only on Connection failed).
+    """
+    res, err = api_put(f"/vendors/{vendor_id}", payload)
+    if res is not None:
+        return res, None
+    if err and not err.startswith("Connection failed:"):
+        return None, err
+
+    try:
+        from sqlalchemy import func
+        from app.database import SessionLocal
+        from app.models.vendor import Vendor
+        from app.models.user import User
+        from app.schemas.vendor_schema import VendorUpdate
+
+        validated = VendorUpdate(**payload)
+        db = SessionLocal()
+        try:
+            vendor = db.query(Vendor).filter(Vendor.id == int(vendor_id)).first()
+            if not vendor:
+                return None, f"Vendor with id={vendor_id} not found."
+            if vendor.status == "TERMINATED":
+                return None, f"Vendor id={vendor_id} is TERMINATED and cannot be modified."
+            if validated.email and validated.email.lower() != vendor.email.lower():
+                v_dup = db.query(Vendor).filter(func.lower(Vendor.email) == validated.email.lower(), Vendor.id != vendor.id).first()
+                u_dup = db.query(User).filter(func.lower(User.email) == validated.email.lower(), (User.vendor_id != vendor.id) | (User.vendor_id.is_(None))).first()
+                if v_dup or u_dup:
+                    return None, f"An account or vendor profile with email '{validated.email}' already exists."
+                vendor.email = validated.email
+            if validated.name:
+                vendor.name = validated.name
+            if validated.owner_name is not None:
+                vendor.owner_name = validated.owner_name
+            if validated.phone:
+                vendor.phone = validated.phone
+            if validated.address is not None:
+                vendor.address = validated.address
+            if validated.tax_id is not None:
+                vendor.tax_id = validated.tax_id
+            cat_val = validated.business_type if validated.business_type is not None else validated.category
+            if cat_val is not None:
+                vendor.business_type = cat_val
+            db.commit()
+            db.refresh(vendor)
+            return _vendor_orm_to_dict(vendor), None
+        finally:
+            db.close()
+    except Exception as exc:
+        return None, _format_validation_error(exc)
+
+
+# Helper to get unified vendors list (strictly role-scoped to protect sensitive fields)
 def get_vendors_list():
-    if is_live_api:
-        v_list = api_get("/vendors/?limit=500")
-        if v_list:
-            return pd.DataFrame(v_list)
-    return csv_data["vendors"].copy()
+    if current_role == "VENDOR":
+        my_prof = fetch_my_vendor_profile()
+        return pd.DataFrame([my_prof]) if my_prof else pd.DataFrame()
+
+    if current_role == "ADMIN":
+        if is_live_api and _api_reachable_this_run:
+            v_list = api_get("/vendors/?limit=500")
+            if v_list is not None:
+                return pd.DataFrame(v_list)
+        try:
+            from app.database import SessionLocal
+            from app.models.vendor import Vendor
+
+            db = SessionLocal()
+            try:
+                rows = [_vendor_orm_to_dict(v) for v in db.query(Vendor).order_by(Vendor.id.asc()).all()]
+                if rows:
+                    return pd.DataFrame(rows)
+            finally:
+                db.close()
+        except Exception:
+            pass
+        return csv_data["vendors"].copy()
+
+    # Public / Customer storefront context: return ONLY operational public vendor ID/Name/Category
+    try:
+        from app.database import SessionLocal
+        from app.models.vendor import Vendor
+
+        db = SessionLocal()
+        try:
+            rows = (
+                db.query(Vendor.id, Vendor.name, Vendor.business_type, Vendor.status)
+                .filter(Vendor.status.in_(OPERATIONAL_VENDOR_STATUSES))
+                .order_by(Vendor.id.asc())
+                .all()
+            )
+            if rows:
+                return pd.DataFrame([
+                    {"id": r.id, "name": r.name, "business_type": r.business_type, "status": r.status}
+                    for r in rows
+                ])
+        finally:
+            db.close()
+    except Exception:
+        pass
+    df_pub = csv_data["vendors"].copy()
+    if not df_pub.empty:
+        if "status" in df_pub.columns:
+            df_pub = df_pub[df_pub["status"].isin(OPERATIONAL_VENDOR_STATUSES)]
+        safe_cols = [c for c in ["id", "name", "business_type", "status"] if c in df_pub.columns]
+        return df_pub[safe_cols]
+    return df_pub
 
 
-# Helper to get unified products list
-def get_products_list():
-    if is_live_api:
+# Helper to get unified products list (role-scoped for VENDOR management vs public storefront)
+def get_products_list(scope_to_vendor: bool = True):
+    if current_role == "VENDOR" and scope_to_vendor:
+        vid = auth_user.get("vendor_id") if auth_user else None
+        if not vid:
+            return pd.DataFrame()
+        if is_live_api and _api_reachable_this_run:
+            p_list = api_get(f"/products/?vendor_id={int(vid)}&limit=500")
+            if p_list is not None:
+                return pd.DataFrame(p_list)
+        try:
+            from app.database import SessionLocal
+            from app.models.product import Product
+
+            db = SessionLocal()
+            try:
+                prods = db.query(Product).filter(Product.vendor_id == int(vid)).order_by(Product.id.asc()).all()
+                return pd.DataFrame([
+                    {
+                        "id": p.id,
+                        "name": p.name,
+                        "description": p.description,
+                        "price": float(p.price),
+                        "cost_price": float(p.cost_price) if p.cost_price is not None else None,
+                        "category": p.category,
+                        "parent_category": p.parent_category,
+                        "vendor_id": p.vendor_id,
+                    }
+                    for p in prods
+                ])
+            finally:
+                db.close()
+        except Exception:
+            pass
+        df_csv = csv_data["products"].copy()
+        return df_csv[df_csv["vendor_id"] == int(vid)] if not df_csv.empty else df_csv
+
+    if is_live_api and _api_reachable_this_run:
         p_list = api_get("/products/?limit=500")
-        if p_list:
+        if p_list is not None:
             return pd.DataFrame(p_list)
+
+    try:
+        from app.database import SessionLocal
+        from app.models.product import Product
+        from app.models.vendor import Vendor
+
+        db = SessionLocal()
+        try:
+            q = db.query(Product).join(Vendor, Product.vendor_id == Vendor.id)
+            if current_role != "ADMIN" or not scope_to_vendor:
+                q = q.filter(Vendor.status.in_(OPERATIONAL_VENDOR_STATUSES))
+            prods = q.order_by(Product.id.asc()).all()
+            if prods:
+                return pd.DataFrame([
+                    {
+                        "id": p.id,
+                        "name": p.name,
+                        "description": p.description,
+                        "price": float(p.price),
+                        "cost_price": float(p.cost_price) if p.cost_price is not None else None,
+                        "category": p.category,
+                        "parent_category": p.parent_category,
+                        "vendor_id": p.vendor_id,
+                    }
+                    for p in prods
+                ])
+        finally:
+            db.close()
+    except Exception:
+        pass
     return csv_data["products"].copy()
+
+
+def get_inventory_status_records():
+    """Fetch role-scoped inventory status records (API first, DB/CSV scoped fallback)."""
+    if is_live_api and _api_reachable_this_run:
+        inv_res = api_get("/analytics/inventory/status")
+        if inv_res is not None:
+            return inv_res
+
+    vid = int(auth_user["vendor_id"]) if (current_role == "VENDOR" and auth_user and auth_user.get("vendor_id")) else None
+    if current_role == "VENDOR" and not vid:
+        return []
+    if current_role == "CUSTOMER":
+        return []
+
+    try:
+        from app.database import SessionLocal
+        from app.services import inventory_service
+
+        db = SessionLocal()
+        try:
+            return inventory_service.get_inventory_status(db, vendor_id=vid)
+        finally:
+            db.close()
+    except Exception:
+        pass
+
+    if not csv_data["inventory"].empty:
+        merged_inv = csv_data["inventory"].merge(csv_data["products"], left_on="product_id", right_on="id")
+        if vid is not None:
+            merged_inv = merged_inv[merged_inv["vendor_id"] == vid]
+        return [
+            {
+                "product_id": int(r["product_id"]),
+                "product_name": r["name"],
+                "price": float(r["price"]),
+                "current_stock": int(r["current_stock"]),
+                "reorder_level": int(r["reorder_level"]),
+                "warehouse": r.get("warehouse", "Main"),
+                "stock_value": round(float(r["current_stock"]) * float(r["price"]), 2),
+                "status": "HEALTHY" if r["current_stock"] > r["reorder_level"] else ("LOW_STOCK" if r["current_stock"] > 0 else "OUT_OF_STOCK"),
+            }
+            for _, r in merged_inv.iterrows()
+        ]
+    return []
+
+
+def get_stock_movements_records(limit: int = 100):
+    """Fetch role-scoped stock movements audit records."""
+    if is_live_api and _api_reachable_this_run:
+        mov_res = api_get(f"/analytics/inventory/movements?limit={limit}")
+        if mov_res is not None:
+            return mov_res
+
+    vid = int(auth_user["vendor_id"]) if (current_role == "VENDOR" and auth_user and auth_user.get("vendor_id")) else None
+    if current_role == "VENDOR" and not vid:
+        return []
+    if current_role == "CUSTOMER":
+        return []
+
+    try:
+        from app.database import SessionLocal
+        from app.services import inventory_service
+
+        db = SessionLocal()
+        try:
+            return inventory_service.get_stock_movements(db, limit=limit, vendor_id=vid)
+        finally:
+            db.close()
+    except Exception:
+        pass
+
+    if not csv_data["movements"].empty:
+        df_m = csv_data["movements"].merge(csv_data["products"], left_on="product_id", right_on="id")
+        if vid is not None:
+            df_m = df_m[df_m["vendor_id"] == vid]
+        return [
+            {
+                "movement_id": r["movement_id"],
+                "product_name": r["name"],
+                "movement_type": r["movement_type"],
+                "quantity": int(r["quantity"]),
+                "source_warehouse": r.get("source_warehouse"),
+                "target_warehouse": r.get("target_warehouse"),
+                "created_at": str(r.get("created_at"))[:19],
+            }
+            for _, r in df_m.sort_values("created_at", ascending=False).head(limit).iterrows()
+        ]
+    return []
+
+
+def get_transactions_records(limit: int = 300):
+    """Fetch role-scoped transaction ledger records (strictly tenant-filtered for VENDOR/CUSTOMER)."""
+    if is_live_api and _api_reachable_this_run:
+        tx_res = api_get(f"/analytics/transactions?limit={limit}")
+        if tx_res is not None:
+            return tx_res
+
+    vid = int(auth_user["vendor_id"]) if (current_role == "VENDOR" and auth_user and auth_user.get("vendor_id")) else None
+    cid = int(auth_user["customer_id"]) if (current_role == "CUSTOMER" and auth_user and auth_user.get("customer_id")) else None
+    if (current_role == "VENDOR" and not vid) or (current_role == "CUSTOMER" and not cid):
+        return []
+
+    try:
+        from app.database import SessionLocal
+        from app.models.transaction import Transaction
+        from app.models.product import Product
+        from app.models.vendor import Vendor
+
+        db = SessionLocal()
+        try:
+            q = (
+                db.query(
+                    Transaction.transaction_id,
+                    Transaction.transaction_date,
+                    Transaction.quantity,
+                    Transaction.unit_price,
+                    Transaction.amount,
+                    Product.name.label("product_name"),
+                    Product.category.label("category"),
+                    Vendor.name.label("vendor_name"),
+                )
+                .join(Product, Transaction.product_id == Product.id)
+                .join(Vendor, Transaction.vendor_id == Vendor.id)
+            )
+            if vid is not None:
+                q = q.filter(Transaction.vendor_id == vid)
+            if cid is not None:
+                q = q.filter(Transaction.customer_id == cid)
+            rows = q.order_by(Transaction.transaction_date.desc()).limit(limit).all()
+            return [
+                {
+                    "transaction_id": int(r.transaction_id),
+                    "transaction_date": r.transaction_date.strftime("%Y-%m-%d %H:%M:%S") if r.transaction_date else "",
+                    "product_name": r.product_name,
+                    "category": r.category or "General",
+                    "vendor_name": r.vendor_name,
+                    "quantity": int(r.quantity),
+                    "unit_price": float(r.unit_price),
+                    "amount": float(r.amount),
+                }
+                for r in rows
+            ]
+        finally:
+            db.close()
+    except Exception:
+        pass
+
+    if not csv_data["transactions"].empty:
+        df_t = csv_data["transactions"].merge(csv_data["products"], left_on="product_id", right_on="id", suffixes=("", "_prod"))
+        df_t = df_t.merge(csv_data["vendors"], left_on="vendor_id", right_on="id", suffixes=("", "_vend"))
+        if vid is not None:
+            df_t = df_t[df_t["vendor_id"] == vid]
+        if cid is not None:
+            df_t = df_t[df_t["customer_id"] == cid]
+        return [
+            {
+                "transaction_id": int(r["transaction_id"]),
+                "transaction_date": str(r["transaction_date"])[:19],
+                "product_name": r["name"],
+                "category": r.get("category", "General"),
+                "vendor_name": r["name_vend"],
+                "quantity": int(r["quantity"]),
+                "unit_price": float(r["unit_price"]),
+                "amount": float(r["amount"]),
+            }
+            for _, r in df_t.sort_values("transaction_date", ascending=False).head(limit).iterrows()
+        ]
+    return []
 
 
 def fetch_integration_health(live_api: bool, api_online: bool) -> dict:
@@ -582,448 +1247,735 @@ def render_integration_status_section(live_api: bool, api_online: bool, key_pref
 # 1. 📊 EXECUTIVE DASHBOARD
 # ═════════════════════════════════════════════════════════════════════════════
 if selected_page == "📊 Dashboard":
-    st.title("📊 Executive Dashboard")
-    st.caption("Consolidated marketplace sales performance, revenue analytics, and top product movements.")
+    if current_role == "VENDOR":
+        st.title("📊 Vendor Performance & Storefront Overview")
+        my_vendor_dash = fetch_my_vendor_profile()
+        render_vendor_status_banner(my_vendor_dash)
+        st.markdown("---")
 
-    # PDF & Excel Report Export Buttons (Milestone 3 Module 6)
-    rep_c1, rep_c2, _ = st.columns([1, 1, 2])
-    with rep_c1:
-        pdf_bytes = fetch_report_bytes("pdf")
-        if pdf_bytes:
-            st.download_button(
-                label="📄 Export PDF Report",
-                data=pdf_bytes,
-                file_name="stockpilot_executive_report.pdf",
-                mime="application/pdf",
-                use_container_width=True,
-            )
-        else:
-            st.button("📄 Export PDF Report", disabled=True, use_container_width=True)
-    with rep_c2:
-        excel_bytes = fetch_report_bytes("excel")
-        if excel_bytes:
-            st.download_button(
-                label="📊 Export Excel Report",
-                data=excel_bytes,
-                file_name="stockpilot_executive_report.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
-            )
-        else:
-            st.button("📊 Export Excel Report", disabled=True, use_container_width=True)
+        my_prods = get_products_list(scope_to_vendor=True)
+        my_inv = get_inventory_status_records()
+        my_txs = get_transactions_records(limit=300)
 
-    summary = api_get("/analytics/summary") if is_live_api else None
+        tot_v_rev = sum(float(t.get("amount", 0.0)) for t in my_txs) if my_txs else 0.0
+        tot_v_orders = len(my_txs)
+        low_v_cnt = sum(1 for item in my_inv if item.get("status") != "HEALTHY")
 
-    # Load summary metrics
-    if summary is None and not csv_data["transactions"].empty:
-        df_tx = csv_data["transactions"]
-        total_rev = float(df_tx["amount"].sum())
-        tx_count = len(df_tx)
-        v_count = len(csv_data["vendors"])
-        p_count = len(csv_data["products"])
+        vk1, vk2, vk3, vk4 = st.columns(4)
+        vk1.metric("💰 My Store Revenue", f"₹{tot_v_rev:,.2f}")
+        vk2.metric("🧾 My Store Orders", f"{tot_v_orders:,}")
+        vk3.metric("📦 My Listed Products", len(my_prods))
+        vk4.metric("🚨 My Low / Out of Stock", low_v_cnt)
 
-        # Compute top product & vendor from CSV
-        prod_agg = df_tx.groupby("product_id")["quantity"].sum().reset_index()
-        top_p_row = prod_agg.loc[prod_agg["quantity"].idxmax()] if not prod_agg.empty else None
-        top_p_name = "N/A"
-        if top_p_row is not None and not csv_data["products"].empty:
-            match_p = csv_data["products"][csv_data["products"]["id"] == top_p_row["product_id"]]
-            if not match_p.empty:
-                top_p_name = match_p.iloc[0]["name"]
+        st.markdown("---")
+        vc1, vc2 = st.columns(2)
+        with vc1:
+            st.subheader("📋 My Inventory Snapshot")
+            if my_inv:
+                df_my_inv = pd.DataFrame(my_inv)[["product_name", "current_stock", "reorder_level", "status"]]
+                st.dataframe(df_my_inv, use_container_width=True, hide_index=True)
+            else:
+                st.info("No products or inventory records listed under your store yet.")
 
-        summary = {
-            "total_revenue": total_rev,
-            "transaction_count": tx_count,
-            "vendor_count": v_count,
-            "product_count": p_count,
-            "top_selling_product": {"product_name": top_p_name, "total_units_sold": int(top_p_row["quantity"]) if top_p_row is not None else 0},
-            "top_vendor_by_revenue": None,
-        }
+        with vc2:
+            st.subheader("⏱️ My Recent Transactions")
+            if my_txs:
+                df_my_tx = pd.DataFrame(my_txs)[["transaction_id", "transaction_date", "product_name", "quantity", "amount"]].head(10)
+                st.dataframe(df_my_tx, use_container_width=True, hide_index=True)
+            else:
+                st.info("No store transactions recorded yet.")
 
-    kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-    rev_val = summary.get("total_revenue", 0.0) if summary else 0.0
-    kpi1.metric("💰 Total Revenue", f"₹{rev_val:,.2f}")
-    kpi2.metric("🧾 Total Transactions", f"{summary.get('transaction_count', 0):,}" if summary else "0")
-    kpi3.metric("🏪 Active Vendors", summary.get("vendor_count", 0) if summary else 0)
-    kpi4.metric("📦 Catalog Items", summary.get("product_count", 0) if summary else 0)
+    else:
+        st.title("📊 Executive Dashboard")
+        st.caption("Consolidated marketplace sales performance, revenue analytics, and top product movements.")
 
-    st.markdown("---")
+        # PDF & Excel Report Export Buttons (Milestone 3 Module 6)
+        rep_c1, rep_c2, _ = st.columns([1, 1, 2])
+        with rep_c1:
+            pdf_bytes = fetch_report_bytes("pdf")
+            if pdf_bytes:
+                st.download_button(
+                    label="📄 Export PDF Report",
+                    data=pdf_bytes,
+                    file_name="stockpilot_executive_report.pdf",
+                    mime="application/pdf",
+                    use_container_width=True,
+                )
+            else:
+                st.button("📄 Export PDF Report", disabled=True, use_container_width=True)
+        with rep_c2:
+            excel_bytes = fetch_report_bytes("excel")
+            if excel_bytes:
+                st.download_button(
+                    label="📊 Export Excel Report",
+                    data=excel_bytes,
+                    file_name="stockpilot_executive_report.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                )
+            else:
+                st.button("📊 Export Excel Report", disabled=True, use_container_width=True)
 
-    # ── Stage 4 Audited Financial Performance & Margin Accounting ─────────────
-    st.subheader("💼 Financial Accounting & Margin Analysis (Stage 4)")
-    st.caption("Item-level audited gross profit, discount & refund deductions, and verified COGS data coverage.")
+        summary = api_get("/analytics/summary") if is_live_api else None
 
-    profit_data = api_get("/analytics/revenue/profit-margins") if is_live_api else None
-    if profit_data is None:
-        profit_data = {
-            "gross_sales_gmv": rev_val,
-            "discounts_total": 0.0,
-            "refunds_total": 0.0,
-            "net_sales": rev_val,
-            "cogs_coverage_pct": 0.0,
-            "covered_net_sales": 0.0,
-            "covered_cogs": 0.0,
-            "gross_profit_reported": 0.0,
-            "gross_margin_pct_reported": 0.0,
-            "coverage_status": "No historical cost data recorded (0.0% coverage). Actual profit uncalculated to prevent data fabrication.",
-        }
+        # Load summary metrics
+        if summary is None and not csv_data["transactions"].empty:
+            df_tx = csv_data["transactions"]
+            total_rev = float(df_tx["amount"].sum())
+            tx_count = len(df_tx)
+            v_count = len(csv_data["vendors"])
+            p_count = len(csv_data["products"])
 
-    f1, f2, f3, f4 = st.columns(4)
-    f1.metric("💵 Net Sales", f"₹{profit_data.get('net_sales', 0.0):,.2f}", delta=f"GMV: ₹{profit_data.get('gross_sales_gmv', 0.0):,.2f}")
-    f2.metric("🏷️ Deductions (Disc & Ref)", f"₹{(profit_data.get('discounts_total', 0.0) + profit_data.get('refunds_total', 0.0)):,.2f}")
-    f3.metric("📊 Gross Profit (Reported)", f"₹{profit_data.get('gross_profit_reported', 0.0):,.2f}", delta=f"Margin: {profit_data.get('gross_margin_pct_reported', 0.0):.1f}%")
-    f4.metric("🛡️ COGS Data Coverage", f"{profit_data.get('cogs_coverage_pct', 0.0):.1f}%", help=profit_data.get("coverage_status", ""))
+            # Compute top product & vendor from CSV
+            prod_agg = df_tx.groupby("product_id")["quantity"].sum().reset_index()
+            top_p_row = prod_agg.loc[prod_agg["quantity"].idxmax()] if not prod_agg.empty else None
+            top_p_name = "N/A"
+            if top_p_row is not None and not csv_data["products"].empty:
+                match_p = csv_data["products"][csv_data["products"]["id"] == top_p_row["product_id"]]
+                if not match_p.empty:
+                    top_p_name = match_p.iloc[0]["name"]
 
-    st.info(f"ℹ️ **COGS Audit Status:** {profit_data.get('coverage_status', '')}")
+            summary = {
+                "total_revenue": total_rev,
+                "transaction_count": tx_count,
+                "vendor_count": v_count,
+                "product_count": p_count,
+                "top_selling_product": {"product_name": top_p_name, "total_units_sold": int(top_p_row["quantity"]) if top_p_row is not None else 0},
+                "top_vendor_by_revenue": None,
+            }
 
-    st.markdown("---")
+        kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+        rev_val = summary.get("total_revenue", 0.0) if summary else 0.0
+        kpi1.metric("💰 Total Revenue", f"₹{rev_val:,.2f}")
+        kpi2.metric("🧾 Total Transactions", f"{summary.get('transaction_count', 0):,}" if summary else "0")
+        kpi3.metric("🏪 Active Vendors", summary.get("vendor_count", 0) if summary else 0)
+        kpi4.metric("📦 Catalog Items", summary.get("product_count", 0) if summary else 0)
 
-    # ── Executive Intelligence Overview (Milestone 3 Module 5 Mockup Alignment) ──
-    st.subheader("🧠 Executive Intelligence Overview (Milestone 3 Core Modules)")
-    st.caption("Consolidated analytical intelligence: Customer Behavioral Segments, Recommendation Engine, and Demand Projections.")
+        st.markdown("---")
 
-    intel1, intel2, intel3 = st.columns(3)
+        # ── Stage 4 Audited Financial Performance & Margin Accounting ─────────────
+        st.subheader("💼 Financial Accounting & Margin Analysis (Stage 4)")
+        st.caption("Item-level audited gross profit, discount & refund deductions, and verified COGS data coverage.")
 
-    with intel1:
-        st.markdown("##### 👥 Customer Segmentation")
-        seg_info = api_get("/analytics/customers/segments") if is_live_api else None
-        sil_val = seg_info.get("silhouette_score", 0.572) if seg_info else 0.572
-        db_val = seg_info.get("davies_bouldin_index", 0.553) if seg_info else 0.553
-        n_clusters = seg_info.get("n_clusters", 2) if seg_info else 2
-        st.metric("Optimal Personas", f"{n_clusters} Clusters", delta=f"Silhouette: {sil_val:.3f}")
-        st.markdown(f"**Davies–Bouldin:** `{db_val:.3f}` *(Low scatter ratio)*")
-        st.markdown("• **Champions / VIP:** 10 customers (Avg ₹5,405)<br>• **Core Regulars:** 49 customers (Avg ₹687)", unsafe_allow_html=True)
-        st.caption("👉 Explore: Sidebar > Customer Analytics")
+        profit_data = api_get("/analytics/revenue/profit-margins") if is_live_api else None
+        if profit_data is None:
+            profit_data = {
+                "gross_sales_gmv": rev_val,
+                "discounts_total": 0.0,
+                "refunds_total": 0.0,
+                "net_sales": rev_val,
+                "cogs_coverage_pct": 0.0,
+                "covered_net_sales": 0.0,
+                "covered_cogs": 0.0,
+                "gross_profit_reported": 0.0,
+                "gross_margin_pct_reported": 0.0,
+                "coverage_status": "No historical cost data recorded (0.0% coverage). Actual profit uncalculated to prevent data fabrication.",
+            }
 
-    with intel2:
-        st.markdown("##### 🎯 Recommendation Engine")
-        rec_eval = api_get("/recommendations/evaluation") if is_live_api else None
-        hr3_val = rec_eval.get("hit_rate_at_3", 0.9375) * 100.0 if rec_eval else 93.8
-        rec3_val = rec_eval.get("recall_at_3", 0.8594) * 100.0 if rec_eval else 85.9
-        st.metric("Relevance (Hit Rate@3)", f"{hr3_val:.1f}%", delta="Target: >= 75% (MET)")
-        st.markdown(f"**Recall@3:** `{rec3_val:.1f}%` *(Zero Lookahead Holdout)*")
-        st.markdown("• **Top Pairing:** *Wireless Mouse ➜ Ergonomic Keyboard*<br>• **VIP Cross-Sell:** *Laptop Pro ➜ USB-C Multiport Hub*", unsafe_allow_html=True)
-        st.caption("👉 Explore: Sidebar > Recommendations")
+        f1, f2, f3, f4 = st.columns(4)
+        f1.metric("💵 Net Sales", f"₹{profit_data.get('net_sales', 0.0):,.2f}", delta=f"GMV: ₹{profit_data.get('gross_sales_gmv', 0.0):,.2f}")
+        f2.metric("🏷️ Deductions (Disc & Ref)", f"₹{(profit_data.get('discounts_total', 0.0) + profit_data.get('refunds_total', 0.0)):,.2f}")
+        f3.metric("📊 Gross Profit (Reported)", f"₹{profit_data.get('gross_profit_reported', 0.0):,.2f}", delta=f"Margin: {profit_data.get('gross_margin_pct_reported', 0.0):.1f}%")
+        f4.metric("🛡️ COGS Data Coverage", f"{profit_data.get('cogs_coverage_pct', 0.0):.1f}%", help=profit_data.get("coverage_status", ""))
 
-    with intel3:
-        st.markdown("##### 📈 Inventory Forecast")
-        fc_info = api_get("/forecast/1") if is_live_api else None
-        proj_val = fc_info.get("forecast", 63.0) if fc_info else (round(float(csv_data["transactions"]["quantity"].sum() / 12), 1) if not csv_data["transactions"].empty else 78.5)
-        st.metric("Month-Ahead Demand", f"{int(round(proj_val))} Units", delta="Accuracy: 81.9%")
-        st.markdown("**Validated Accuracy:** `81.9%` *(1 - WAPE, Target >= 80% MET)*")
-        st.markdown("• **Trend Trajectory:** Upward marketplace volume<br>• **Holdout MAE:** 17.5 units across 600 orders", unsafe_allow_html=True)
-        st.caption("👉 Explore: Sidebar > Demand Forecasting")
+        st.info(f"ℹ️ **COGS Audit Status:** {profit_data.get('coverage_status', '')}")
 
-    st.markdown("---")
+        st.markdown("---")
 
-    # Revenue Charts Row
-    c_left, c_right = st.columns(2)
+        # ── Executive Intelligence Overview (Milestone 3 Module 5 Mockup Alignment) ──
+        st.subheader("🧠 Executive Intelligence Overview (Milestone 3 Core Modules)")
+        st.caption("Consolidated analytical intelligence: Customer Behavioral Segments, Recommendation Engine, and Demand Projections.")
 
-    with c_left:
-        st.subheader("🏪 Revenue by Vendor")
-        by_vendor = api_get("/analytics/revenue/by-vendor") if is_live_api else None
-        if not by_vendor and not csv_data["transactions"].empty:
-            df_merged = csv_data["transactions"].merge(csv_data["vendors"], left_on="vendor_id", right_on="id")
-            by_vendor = df_merged.groupby("name")["amount"].sum().reset_index().rename(columns={"name": "vendor_name", "amount": "total_revenue"}).to_dict(orient="records")
+        intel1, intel2, intel3 = st.columns(3)
 
-        if by_vendor:
-            df_v = pd.DataFrame(by_vendor)
-            fig_v = px.bar(
-                df_v,
-                x="vendor_name",
-                y="total_revenue",
-                labels={"vendor_name": "Vendor", "total_revenue": "Revenue (₹)"},
-                color="total_revenue",
-                color_continuous_scale="Blues",
-            )
-            fig_v.update_layout(margin=dict(l=20, r=20, t=30, b=30), showlegend=False, xaxis_tickangle=-25)
-            st.plotly_chart(fig_v, use_container_width=True)
-        else:
-            st.info("No vendor revenue records available.")
+        with intel1:
+            st.markdown("##### 👥 Customer Segmentation")
+            seg_info = api_get("/analytics/customers/segments") if is_live_api else None
+            sil_val = seg_info.get("silhouette_score", 0.572) if seg_info else 0.572
+            db_val = seg_info.get("davies_bouldin_index", 0.553) if seg_info else 0.553
+            n_clusters = seg_info.get("n_clusters", 2) if seg_info else 2
+            st.metric("Optimal Personas", f"{n_clusters} Clusters", delta=f"Silhouette: {sil_val:.3f}")
+            st.markdown(f"**Davies–Bouldin:** `{db_val:.3f}` *(Low scatter ratio)*")
+            st.markdown("• **Champions / VIP:** 10 customers (Avg ₹5,405)<br>• **Core Regulars:** 49 customers (Avg ₹687)", unsafe_allow_html=True)
+            st.caption("👉 Explore: Sidebar > Customer Analytics")
 
-    with c_right:
-        st.subheader("📦 Top Products by Revenue")
-        by_product = api_get("/analytics/revenue/by-product") if is_live_api else None
-        if not by_product and not csv_data["transactions"].empty:
-            df_mp = csv_data["transactions"].merge(csv_data["products"], left_on="product_id", right_on="id")
-            by_product = df_mp.groupby("name")["amount"].sum().reset_index().rename(columns={"name": "product_name", "amount": "total_revenue"}).sort_values("total_revenue", ascending=False).head(8).to_dict(orient="records")
+        with intel2:
+            st.markdown("##### 🎯 Recommendation Engine")
+            rec_eval = api_get("/recommendations/evaluation") if is_live_api else None
+            hr3_val = rec_eval.get("hit_rate_at_3", 0.9375) * 100.0 if rec_eval else 93.8
+            rec3_val = rec_eval.get("recall_at_3", 0.8594) * 100.0 if rec_eval else 85.9
+            st.metric("Relevance (Hit Rate@3)", f"{hr3_val:.1f}%", delta="Target: >= 75% (MET)")
+            st.markdown(f"**Recall@3:** `{rec3_val:.1f}%` *(Zero Lookahead Holdout)*")
+            st.markdown("• **Top Pairing:** *Wireless Mouse ➜ Ergonomic Keyboard*<br>• **VIP Cross-Sell:** *Laptop Pro ➜ USB-C Multiport Hub*", unsafe_allow_html=True)
+            st.caption("👉 Explore: Sidebar > Recommendations")
 
-        if by_product:
-            df_p = pd.DataFrame(by_product).head(8)
-            fig_p = px.pie(
-                df_p,
-                names="product_name",
-                values="total_revenue",
-                hole=0.45,
-                color_discrete_sequence=px.colors.sequential.Teal,
-            )
-            fig_p.update_layout(margin=dict(l=20, r=20, t=30, b=30))
-            st.plotly_chart(fig_p, use_container_width=True)
-        else:
-            st.info("No product revenue records available.")
+        with intel3:
+            st.markdown("##### 📈 Inventory Forecast")
+            fc_info = api_get("/forecast/1") if is_live_api else None
+            proj_val = fc_info.get("forecast", 63.0) if fc_info else (round(float(csv_data["transactions"]["quantity"].sum() / 12), 1) if not csv_data["transactions"].empty else 78.5)
+            st.metric("Month-Ahead Demand", f"{int(round(proj_val))} Units", delta="Accuracy: 81.9%")
+            st.markdown("**Validated Accuracy:** `81.9%` *(1 - WAPE, Target >= 80% MET)*")
+            st.markdown("• **Trend Trajectory:** Upward marketplace volume<br>• **Holdout MAE:** 17.5 units across 600 orders", unsafe_allow_html=True)
+            st.caption("👉 Explore: Sidebar > Demand Forecasting")
 
-    st.markdown("---")
+        st.markdown("---")
 
-    # Advanced Revenue Intelligence Row (Milestone 3 Module 5)
-    st.subheader("📈 Advanced Revenue Intelligence & Market Share")
-    g_left, g_right = st.columns(2)
+        # Revenue Charts Row
+        c_left, c_right = st.columns(2)
 
-    with g_left:
-        st.markdown("##### 📅 Month-over-Month (MoM) Revenue Growth")
-        growth_data = api_get("/analytics/revenue/growth") if is_live_api else None
-        if not growth_data and not csv_data["transactions"].empty:
-            df_g = csv_data["transactions"].copy()
-            df_g["year_month"] = df_g["transaction_date"].dt.to_period("M").astype(str)
-            monthly_agg = df_g.groupby("year_month")["amount"].sum().reset_index()
-            monthly_agg.columns = ["year_month", "revenue"]
-            growth_list = []
-            prev_r = None
-            for _, r in monthly_agg.iterrows():
-                cur_r = float(r["revenue"])
-                pct = round(((cur_r - prev_r) / prev_r) * 100, 2) if prev_r else None
-                prev_r = cur_r
-                growth_list.append({"year_month": r["year_month"], "revenue": cur_r, "mom_growth_pct": pct})
-            growth_data = {"monthly_growth": growth_list}
+        with c_left:
+            st.subheader("🏪 Revenue by Vendor")
+            by_vendor = api_get("/analytics/revenue/by-vendor") if is_live_api else None
+            if not by_vendor and not csv_data["transactions"].empty:
+                df_merged = csv_data["transactions"].merge(csv_data["vendors"], left_on="vendor_id", right_on="id")
+                by_vendor = df_merged.groupby("name")["amount"].sum().reset_index().rename(columns={"name": "vendor_name", "amount": "total_revenue"}).to_dict(orient="records")
 
-        if growth_data and growth_data.get("monthly_growth"):
-            g_items = growth_data["monthly_growth"]
-            fig_g = make_subplots(specs=[[{"secondary_y": True}]])
-            fig_g.add_trace(
-                go.Bar(
-                    x=[item["year_month"] for item in g_items],
-                    y=[item["revenue"] for item in g_items],
-                    name="Revenue (₹)",
-                    marker_color="#0284c7",
-                ),
-                secondary_y=False,
-            )
-            fig_g.add_trace(
-                go.Scatter(
-                    x=[item["year_month"] for item in g_items],
-                    y=[item.get("mom_growth_pct") or 0.0 for item in g_items],
-                    name="MoM Growth (%)",
-                    mode="lines+markers",
-                    line=dict(color="#10b981", width=3),
-                    marker=dict(size=7),
-                ),
-                secondary_y=True,
-            )
-            fig_g.update_layout(
-                margin=dict(l=20, r=20, t=30, b=30),
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-            )
-            fig_g.update_yaxes(title_text="Revenue (₹)", secondary_y=False)
-            fig_g.update_yaxes(title_text="MoM Growth (%)", secondary_y=True)
-            st.plotly_chart(fig_g, use_container_width=True)
-        else:
-            st.info("Insufficient monthly revenue history for growth trends.")
+            if by_vendor:
+                df_v = pd.DataFrame(by_vendor)
+                fig_v = px.bar(
+                    df_v,
+                    x="vendor_name",
+                    y="total_revenue",
+                    labels={"vendor_name": "Vendor", "total_revenue": "Revenue (₹)"},
+                    color="total_revenue",
+                    color_continuous_scale="Blues",
+                )
+                fig_v.update_layout(margin=dict(l=20, r=20, t=30, b=30), showlegend=False, xaxis_tickangle=-25)
+                st.plotly_chart(fig_v, use_container_width=True)
+            else:
+                st.info("No vendor revenue records available.")
 
-    with g_right:
-        st.markdown("##### 🏆 Vendor Benchmarking & Market Share")
-        bench_data = api_get("/analytics/revenue/benchmarking") if is_live_api else None
-        if not bench_data and not csv_data["transactions"].empty:
-            df_b = csv_data["transactions"].merge(csv_data["vendors"], left_on="vendor_id", right_on="id")
-            v_agg = df_b.groupby("name")["amount"].sum().reset_index()
-            total_b = v_agg["amount"].sum()
-            bench_items = [
-                {
-                    "vendor_name": r["name"],
-                    "revenue": float(r["amount"]),
-                    "market_share_pct": round(float(r["amount"]) / total_b * 100, 2) if total_b > 0 else 0.0,
-                }
-                for _, r in v_agg.sort_values("amount", ascending=False).iterrows()
-            ]
-            bench_data = {"benchmarking": bench_items}
+        with c_right:
+            st.subheader("📦 Top Products by Revenue")
+            by_product = api_get("/analytics/revenue/by-product") if is_live_api else None
+            if not by_product and not csv_data["transactions"].empty:
+                df_mp = csv_data["transactions"].merge(csv_data["products"], left_on="product_id", right_on="id")
+                by_product = df_mp.groupby("name")["amount"].sum().reset_index().rename(columns={"name": "product_name", "amount": "total_revenue"}).sort_values("total_revenue", ascending=False).head(8).to_dict(orient="records")
 
-        if bench_data and bench_data.get("benchmarking"):
-            df_bench = pd.DataFrame(bench_data["benchmarking"]).sort_values("market_share_pct", ascending=True)
-            fig_bench = px.bar(
-                df_bench,
-                x="market_share_pct",
-                y="vendor_name",
-                orientation="h",
-                text="market_share_pct",
-                labels={"market_share_pct": "Market Share (%)", "vendor_name": "Vendor"},
-                color="revenue",
-                color_continuous_scale="Teal",
-            )
-            fig_bench.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
-            fig_bench.update_layout(margin=dict(l=20, r=20, t=30, b=30), showlegend=False)
-            st.plotly_chart(fig_bench, use_container_width=True)
-        else:
-            st.info("No vendor benchmarking records available.")
+            if by_product:
+                df_p = pd.DataFrame(by_product).head(8)
+                fig_p = px.pie(
+                    df_p,
+                    names="product_name",
+                    values="total_revenue",
+                    hole=0.45,
+                    color_discrete_sequence=px.colors.sequential.Teal,
+                )
+                fig_p.update_layout(margin=dict(l=20, r=20, t=30, b=30))
+                st.plotly_chart(fig_p, use_container_width=True)
+            else:
+                st.info("No product revenue records available.")
 
-    st.markdown("---")
+        st.markdown("---")
 
-    # Category & Regional Sales Distribution (Stage 4)
-    c_cat, c_reg = st.columns(2)
-    with c_cat:
-        st.subheader("🏷️ Revenue by Category")
-        cat_data = api_get("/analytics/revenue/by-category") if is_live_api else None
-        if cat_data and cat_data.get("categories"):
-            df_cat = pd.DataFrame(cat_data["categories"])
-            fig_cat = px.bar(df_cat, x="category", y="revenue", color="revenue", color_continuous_scale="Purples", labels={"revenue": "Revenue (₹)", "category": "Category"})
-            fig_cat.update_layout(margin=dict(l=20, r=20, t=30, b=30), showlegend=False, xaxis_tickangle=-20)
-            st.plotly_chart(fig_cat, use_container_width=True)
-        else:
-            st.info("No category revenue records available.")
+        # Advanced Revenue Intelligence Row (Milestone 3 Module 5)
+        st.subheader("📈 Advanced Revenue Intelligence & Market Share")
+        g_left, g_right = st.columns(2)
 
-    with c_reg:
-        st.subheader("🗺️ Revenue by Customer Region")
-        reg_data = api_get("/analytics/revenue/by-region") if is_live_api else None
-        if reg_data and reg_data.get("regions"):
-            df_reg = pd.DataFrame(reg_data["regions"])
-            fig_reg = px.pie(df_reg, names="region", values="revenue", hole=0.4, color_discrete_sequence=px.colors.sequential.Viridis)
-            fig_reg.update_layout(margin=dict(l=20, r=20, t=30, b=30))
-            st.plotly_chart(fig_reg, use_container_width=True)
-        else:
-            st.info("No regional customer revenue records available.")
+        with g_left:
+            st.markdown("##### 📅 Month-over-Month (MoM) Revenue Growth")
+            growth_data = api_get("/analytics/revenue/growth") if is_live_api else None
+            if not growth_data and not csv_data["transactions"].empty:
+                df_g = csv_data["transactions"].copy()
+                df_g["year_month"] = df_g["transaction_date"].dt.to_period("M").astype(str)
+                monthly_agg = df_g.groupby("year_month")["amount"].sum().reset_index()
+                monthly_agg.columns = ["year_month", "revenue"]
+                growth_list = []
+                prev_r = None
+                for _, r in monthly_agg.iterrows():
+                    cur_r = float(r["revenue"])
+                    pct = round(((cur_r - prev_r) / prev_r) * 100, 2) if prev_r else None
+                    prev_r = cur_r
+                    growth_list.append({"year_month": r["year_month"], "revenue": cur_r, "mom_growth_pct": pct})
+                growth_data = {"monthly_growth": growth_list}
 
-    st.markdown("---")
+            if growth_data and growth_data.get("monthly_growth"):
+                g_items = growth_data["monthly_growth"]
+                fig_g = make_subplots(specs=[[{"secondary_y": True}]])
+                fig_g.add_trace(
+                    go.Bar(
+                        x=[item["year_month"] for item in g_items],
+                        y=[item["revenue"] for item in g_items],
+                        name="Revenue (₹)",
+                        marker_color="#0284c7",
+                    ),
+                    secondary_y=False,
+                )
+                fig_g.add_trace(
+                    go.Scatter(
+                        x=[item["year_month"] for item in g_items],
+                        y=[item.get("mom_growth_pct") or 0.0 for item in g_items],
+                        name="MoM Growth (%)",
+                        mode="lines+markers",
+                        line=dict(color="#10b981", width=3),
+                        marker=dict(size=7),
+                    ),
+                    secondary_y=True,
+                )
+                fig_g.update_layout(
+                    margin=dict(l=20, r=20, t=30, b=30),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                )
+                fig_g.update_yaxes(title_text="Revenue (₹)", secondary_y=False)
+                fig_g.update_yaxes(title_text="MoM Growth (%)", secondary_y=True)
+                st.plotly_chart(fig_g, use_container_width=True)
+            else:
+                st.info("Insufficient monthly revenue history for growth trends.")
 
-    # ── Stage 5 Personalized Offer Strategy & Stock Impact Safety Guard ─────────
-    st.subheader("🛡️ AI Personalized Offer Strategy & Stock Impact Safety Guard (Stage 5)")
-    st.caption("Validates personalized cross-sell pathways and simulates promotional lift vs safety-stock boundaries before campaign approval.")
+        with g_right:
+            st.markdown("##### 🏆 Vendor Benchmarking & Market Share")
+            bench_data = api_get("/analytics/revenue/benchmarking") if is_live_api else None
+            if not bench_data and not csv_data["transactions"].empty:
+                df_b = csv_data["transactions"].merge(csv_data["vendors"], left_on="vendor_id", right_on="id")
+                v_agg = df_b.groupby("name")["amount"].sum().reset_index()
+                total_b = v_agg["amount"].sum()
+                bench_items = [
+                    {
+                        "vendor_name": r["name"],
+                        "revenue": float(r["amount"]),
+                        "market_share_pct": round(float(r["amount"]) / total_b * 100, 2) if total_b > 0 else 0.0,
+                    }
+                    for _, r in v_agg.sort_values("amount", ascending=False).iterrows()
+                ]
+                bench_data = {"benchmarking": bench_items}
 
-    offer_tab_sim, offer_tab_strat = st.tabs(["⚡ Promotional Stock Impact Simulator", "🎯 Active Personalized Offer Proposals"])
+            if bench_data and bench_data.get("benchmarking"):
+                df_bench = pd.DataFrame(bench_data["benchmarking"]).sort_values("market_share_pct", ascending=True)
+                fig_bench = px.bar(
+                    df_bench,
+                    x="market_share_pct",
+                    y="vendor_name",
+                    orientation="h",
+                    text="market_share_pct",
+                    labels={"market_share_pct": "Market Share (%)", "vendor_name": "Vendor"},
+                    color="revenue",
+                    color_continuous_scale="Teal",
+                )
+                fig_bench.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
+                fig_bench.update_layout(margin=dict(l=20, r=20, t=30, b=30), showlegend=False)
+                st.plotly_chart(fig_bench, use_container_width=True)
+            else:
+                st.info("No vendor benchmarking records available.")
 
-    with offer_tab_sim:
-        st.markdown("##### 🧪 Pre-Campaign Stock Impact Simulation")
-        st.caption("Formula: Ending Stock = Current Stock + Replenishment - Baseline Demand - Lift. Suppresses promotions if Ending Stock < Safety Stock.")
-        sim_col1, sim_col2 = st.columns([1, 2])
+        st.markdown("---")
 
-        df_p_sim = get_products_list()
+        # Category & Regional Sales Distribution (Stage 4)
+        c_cat, c_reg = st.columns(2)
+        with c_cat:
+            st.subheader("🏷️ Revenue by Category")
+            cat_data = api_get("/analytics/revenue/by-category") if is_live_api else None
+            if cat_data and cat_data.get("categories"):
+                df_cat = pd.DataFrame(cat_data["categories"])
+                fig_cat = px.bar(df_cat, x="category", y="revenue", color="revenue", color_continuous_scale="Purples", labels={"revenue": "Revenue (₹)", "category": "Category"})
+                fig_cat.update_layout(margin=dict(l=20, r=20, t=30, b=30), showlegend=False, xaxis_tickangle=-20)
+                st.plotly_chart(fig_cat, use_container_width=True)
+            else:
+                st.info("No category revenue records available.")
 
-        with sim_col1:
-            p_opts = {r["id"]: f"{r['name']} (ID: {r['id']})" for _, r in df_p_sim.iterrows()} if not df_p_sim.empty else {1: "Product 1"}
-            sim_pid = st.selectbox("Product to Promote", options=list(p_opts.keys()), format_func=lambda x: p_opts[x], key="sim_offer_pid")
-            sim_disc = st.slider("Proposed Discount %", min_value=1.0, max_value=40.0, value=15.0, step=1.0, key="sim_offer_disc")
-            sim_days = st.selectbox("Campaign Duration (Days)", options=[7, 14, 30, 60], index=1, key="sim_offer_days")
-            sim_po = st.number_input("Confirmed Incoming Replenishment (Units)", min_value=0, value=0, step=10, key="sim_offer_po")
-            st.button("Evaluate Stock Safety", key="btn_run_sim")
+        with c_reg:
+            st.subheader("🗺️ Revenue by Customer Region")
+            reg_data = api_get("/analytics/revenue/by-region") if is_live_api else None
+            if reg_data and reg_data.get("regions"):
+                df_reg = pd.DataFrame(reg_data["regions"])
+                fig_reg = px.pie(df_reg, names="region", values="revenue", hole=0.4, color_discrete_sequence=px.colors.sequential.Viridis)
+                fig_reg.update_layout(margin=dict(l=20, r=20, t=30, b=30))
+                st.plotly_chart(fig_reg, use_container_width=True)
+            else:
+                st.info("No regional customer revenue records available.")
 
-        with sim_col2:
-            sim_result = api_get(f"/offers/stock-impact/{sim_pid}?discount_pct={sim_disc}&horizon_days={sim_days}&confirmed_replenishment={sim_po}") if is_live_api else None
-            if not sim_result:
+        st.markdown("---")
+
+        # ── Stage 5 Personalized Offer Strategy & Stock Impact Safety Guard ─────────
+        st.subheader("🛡️ AI Personalized Offer Strategy & Stock Impact Safety Guard (Stage 5)")
+        st.caption("Validates personalized cross-sell pathways and simulates promotional lift vs safety-stock boundaries before campaign approval.")
+
+        offer_tab_sim, offer_tab_strat = st.tabs(["⚡ Promotional Stock Impact Simulator", "🎯 Active Personalized Offer Proposals"])
+
+        with offer_tab_sim:
+            st.markdown("##### 🧪 Pre-Campaign Stock Impact Simulation")
+            st.caption("Formula: Ending Stock = Current Stock + Replenishment - Baseline Demand - Lift. Suppresses promotions if Ending Stock < Safety Stock.")
+            sim_col1, sim_col2 = st.columns([1, 2])
+
+            df_p_sim = get_products_list()
+
+            with sim_col1:
+                p_opts = {r["id"]: f"{r['name']} (ID: {r['id']})" for _, r in df_p_sim.iterrows()} if not df_p_sim.empty else {1: "Product 1"}
+                sim_pid = st.selectbox("Product to Promote", options=list(p_opts.keys()), format_func=lambda x: p_opts[x], key="sim_offer_pid")
+                sim_disc = st.slider("Proposed Discount %", min_value=1.0, max_value=40.0, value=15.0, step=1.0, key="sim_offer_disc")
+                sim_days = st.selectbox("Campaign Duration (Days)", options=[7, 14, 30, 60], index=1, key="sim_offer_days")
+                sim_po = st.number_input("Confirmed Incoming Replenishment (Units)", min_value=0, value=0, step=10, key="sim_offer_po")
+                st.button("Evaluate Stock Safety", key="btn_run_sim")
+
+            with sim_col2:
+                sim_result = api_get(f"/offers/stock-impact/{sim_pid}?discount_pct={sim_disc}&horizon_days={sim_days}&confirmed_replenishment={sim_po}") if is_live_api else None
+                if not sim_result:
+                    try:
+                        from app.database import SessionLocal
+                        from app.services.offer_service import evaluate_stock_impact_safety
+                        db_sim = SessionLocal()
+                        try:
+                            sim_result = evaluate_stock_impact_safety(db_sim, product_id=sim_pid, discount_pct=sim_disc, horizon_days=sim_days, confirmed_replenishment=sim_po)
+                        finally:
+                            db_sim.close()
+                    except Exception:
+                        pass
+
+                if sim_result:
+                    res_col1, res_col2, res_col3, res_col4 = st.columns(4)
+                    res_col1.metric("📦 Current Stock", sim_result.get("current_stock", 0))
+                    res_col2.metric("📉 Projected Lift", f"+{sim_result.get('projected_promotional_lift', 0.0):.1f} units", delta=f"Elasticity: {sim_result.get('price_elasticity', 1.5):.2f}")
+                    res_col3.metric("🛡️ Safety Stock", sim_result.get("safety_stock", 15))
+                    res_col4.metric("📊 Ending Stock", f"{sim_result.get('projected_ending_stock', 0.0):.1f} units")
+
+                    status_decision = sim_result.get("status", "APPROVED")
+                    if status_decision == "APPROVED":
+                        st.success(f"✅ **STATUS: APPROVED** — {sim_result.get('decision_reason', '')}")
+                    else:
+                        st.error(f"🛑 **STATUS: SUPPRESSED** — {sim_result.get('decision_reason', '')}")
+
+                    st.caption(f"ℹ️ **Audit Trail:** {sim_result.get('audit_explanation', '')}")
+                    st.caption(f"Elasticity Source: `{sim_result.get('elasticity_source', '')}` | Empirically Learned: `{sim_result.get('is_empirically_learned', False)}`")
+
+        with offer_tab_strat:
+            st.markdown("##### 📋 AI-Generated Segment Offer Strategy")
+            strat_data = api_get("/offers/strategy?limit=15") if is_live_api else None
+            if not strat_data:
                 try:
                     from app.database import SessionLocal
-                    from app.services.offer_service import evaluate_stock_impact_safety
-                    db_sim = SessionLocal()
+                    from app.services.offer_service import generate_personalized_offer_strategy
+                    db_strat = SessionLocal()
                     try:
-                        sim_result = evaluate_stock_impact_safety(db_sim, product_id=sim_pid, discount_pct=sim_disc, horizon_days=sim_days, confirmed_replenishment=sim_po)
+                        strat_data = generate_personalized_offer_strategy(db_strat, limit=15)
                     finally:
-                        db_sim.close()
+                        db_strat.close()
                 except Exception:
                     pass
 
-            if sim_result:
-                res_col1, res_col2, res_col3, res_col4 = st.columns(4)
-                res_col1.metric("📦 Current Stock", sim_result.get("current_stock", 0))
-                res_col2.metric("📉 Projected Lift", f"+{sim_result.get('projected_promotional_lift', 0.0):.1f} units", delta=f"Elasticity: {sim_result.get('price_elasticity', 1.5):.2f}")
-                res_col3.metric("🛡️ Safety Stock", sim_result.get("safety_stock", 15))
-                res_col4.metric("📊 Ending Stock", f"{sim_result.get('projected_ending_stock', 0.0):.1f} units")
+            if strat_data and strat_data.get("offers"):
+                st.markdown(f"**Total Generated Offers:** `{strat_data.get('total_personalized_offers', 0)}` | Segment Distribution: `{strat_data.get('segment_distribution', {})}`")
+                cols_show = ["offer_id", "customer_name", "target_segment", "product_name", "original_price", "discount_pct", "discounted_price", "strategic_objective", "recommendation_pathway"]
+                df_strat_show = pd.DataFrame(strat_data["offers"])
+                valid_cols = [c for c in cols_show if c in df_strat_show.columns]
+                st.dataframe(df_strat_show[valid_cols], use_container_width=True)
+            else:
+                st.info("No active personalized offer proposals.")
 
-                status_decision = sim_result.get("status", "APPROVED")
-                if status_decision == "APPROVED":
-                    st.success(f"✅ **STATUS: APPROVED** — {sim_result.get('decision_reason', '')}")
-                else:
-                    st.error(f"🛑 **STATUS: SUPPRESSED** — {sim_result.get('decision_reason', '')}")
-
-                st.caption(f"ℹ️ **Audit Trail:** {sim_result.get('audit_explanation', '')}")
-                st.caption(f"Elasticity Source: `{sim_result.get('elasticity_source', '')}` | Empirically Learned: `{sim_result.get('is_empirically_learned', False)}`")
-
-    with offer_tab_strat:
-        st.markdown("##### 📋 AI-Generated Segment Offer Strategy")
-        strat_data = api_get("/offers/strategy?limit=15") if is_live_api else None
-        if not strat_data:
-            try:
-                from app.database import SessionLocal
-                from app.services.offer_service import generate_personalized_offer_strategy
-                db_strat = SessionLocal()
-                try:
-                    strat_data = generate_personalized_offer_strategy(db_strat, limit=15)
-                finally:
-                    db_strat.close()
-            except Exception:
-                pass
-
-        if strat_data and strat_data.get("offers"):
-            st.markdown(f"**Total Generated Offers:** `{strat_data.get('total_personalized_offers', 0)}` | Segment Distribution: `{strat_data.get('segment_distribution', {})}`")
-            cols_show = ["offer_id", "customer_name", "target_segment", "product_name", "original_price", "discount_pct", "discounted_price", "strategic_objective", "recommendation_pathway"]
-            df_strat_show = pd.DataFrame(strat_data["offers"])
-            valid_cols = [c for c in cols_show if c in df_strat_show.columns]
-            st.dataframe(df_strat_show[valid_cols], use_container_width=True)
-        else:
-            st.info("No active personalized offer proposals.")
-
-    st.markdown("---")
-
-    # Recent Transactions Feed
-    st.subheader("⏱️ Recent Marketplace Activity")
-    tx_recent = api_get("/analytics/transactions?limit=8") if is_live_api else None
-    if not tx_recent and not csv_data["transactions"].empty:
-        df_feed = csv_data["transactions"].merge(csv_data["products"], left_on="product_id", right_on="id", suffixes=("", "_prod"))
-        df_feed = df_feed.merge(csv_data["vendors"], left_on="vendor_id", right_on="id", suffixes=("", "_vend"))
-        tx_recent = [
-            {
-                "transaction_id": r["transaction_id"],
-                "transaction_date": str(r["transaction_date"])[:19],
-                "product_name": r["name"],
-                "vendor_name": r["name_vend"],
-                "quantity": int(r["quantity"]),
-                "amount": float(r["amount"]),
-            }
-            for _, r in df_feed.sort_values("transaction_date", ascending=False).head(8).iterrows()
-        ]
-
-    if tx_recent:
-        st.dataframe(pd.DataFrame(tx_recent), use_container_width=True)
-    else:
-        st.info("No recent transaction activity recorded.")
-
-    if current_role not in ("VENDOR", "CUSTOMER"):
         st.markdown("---")
-        with st.expander("🩺 Admin Integration Status / System Health", expanded=True):
-            render_integration_status_section(live_api=is_live_api, api_online=api_is_online, key_prefix="exec_health")
+
+        # Recent Transactions Feed
+        st.subheader("⏱️ Recent Marketplace Activity")
+        tx_recent = api_get("/analytics/transactions?limit=8") if is_live_api else None
+        if not tx_recent and not csv_data["transactions"].empty:
+            df_feed = csv_data["transactions"].merge(csv_data["products"], left_on="product_id", right_on="id", suffixes=("", "_prod"))
+            df_feed = df_feed.merge(csv_data["vendors"], left_on="vendor_id", right_on="id", suffixes=("", "_vend"))
+            tx_recent = [
+                {
+                    "transaction_id": r["transaction_id"],
+                    "transaction_date": str(r["transaction_date"])[:19],
+                    "product_name": r["name"],
+                    "vendor_name": r["name_vend"],
+                    "quantity": int(r["quantity"]),
+                    "amount": float(r["amount"]),
+                }
+                for _, r in df_feed.sort_values("transaction_date", ascending=False).head(8).iterrows()
+            ]
+
+        if tx_recent:
+            st.dataframe(pd.DataFrame(tx_recent), use_container_width=True)
+        else:
+            st.info("No recent transaction activity recorded.")
+
+        if current_role not in ("VENDOR", "CUSTOMER"):
+            st.markdown("---")
+            with st.expander("🩺 Admin Integration Status / System Health", expanded=True):
+                render_integration_status_section(live_api=is_live_api, api_online=api_is_online, key_prefix="exec_health")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
 # 2. 🏢 VENDOR MANAGEMENT
 # ═════════════════════════════════════════════════════════════════════════════
 elif selected_page == "🏢 Vendor Management":
-    st.title("🏢 Vendor Management")
-    st.caption("Manage registered marketplace suppliers, monitor contact records, and onboard new partners.")
+    if current_role == "CUSTOMER":
+        st.title("🏢 Vendor Management")
+        st.error("🔒 Access Denied: Customer accounts cannot access Vendor Management.")
 
-    df_vendors = get_vendors_list()
+    elif current_role is None:
+        st.title("🏢 Vendor Management")
+        st.warning(
+            "🔐 Administrator or Vendor sign-in required. Use **Sign In / Register** in the sidebar "
+            "to manage marketplace vendors or check your vendor application status."
+        )
+        st.info("New partners can apply via the **Register as Vendor** tab in the sidebar.")
 
-    col_v1, col_v2, col_v3 = st.columns(3)
-    col_v1.metric("🏢 Total Vendors", len(df_vendors))
-    col_v2.metric("📞 Contact Verified", f"{int(len(df_vendors) * 1.0)} (100%)")
-    col_v3.metric("🌐 Onboarding Mode", "Live API" if is_live_api else "Read-Only CSV")
+    elif current_role == "VENDOR":
+        st.title("🏢 My Vendor Profile & Onboarding Status")
+        st.caption("View your application approval status, verification feedback, and manage your store contact profile.")
 
-    st.markdown("---")
+        my_v_prof = fetch_my_vendor_profile()
+        render_vendor_status_banner(my_v_prof)
 
-    tab_v_list, tab_v_add, tab_v_edit, tab_v_gov, tab_v_settle = st.tabs([
-        "📋 Vendor Directory", "➕ Register Vendor", "✏️ Edit Vendor", "🛡️ Lifecycle & Governance", "💰 Settlement Ledger"
-    ])
+        if my_v_prof:
+            st.markdown("---")
+            mv1, mv2, mv3, mv4 = st.columns(4)
+            mv1.metric("📌 Application Status", format_vendor_status_label(my_v_prof.get("status")))
+            mv2.metric("💼 Commission Tier", str(my_v_prof.get("commission_tier", "TIER_STANDARD")))
+            mv3.metric("🛡️ Compliance Status", str(my_v_prof.get("compliance_status", "PENDING_REVIEW")))
+            mv4.metric("🏷️ Category", str(my_v_prof.get("vendor_category") or my_v_prof.get("business_type") or "Unassigned"))
 
-    with tab_v_list:
-        st.subheader("All Registered Vendors")
-        if not df_vendors.empty:
-            display_cols = [c for c in ["id", "name", "email", "phone", "status", "commission_tier", "commission_rate", "compliance_status", "created_at"] if c in df_vendors.columns]
-            st.dataframe(df_vendors[display_cols], use_container_width=True)
-        else:
-            st.info("No vendors found.")
+            tab_my_prof, tab_my_settle = st.tabs(["👤 Store Profile & Verification", "💰 My Settlements"])
 
-    with tab_v_add:
-        st.subheader("Register a New Vendor")
-        if not is_live_api:
-            st.warning("⚠️ Vendor registration writes directly to PostgreSQL. Switch to 'Live API' mode in the sidebar to register new entries.")
-        else:
+            with tab_my_prof:
+                is_terminated = str(my_v_prof.get("status", "")).upper() == "TERMINATED"
+                if is_terminated:
+                    st.error("⛔ Terminated vendor profiles are locked and cannot be edited.")
+
+                with st.form("form_vendor_self_edit"):
+                    curr_cat = my_v_prof.get("vendor_category") or my_v_prof.get("business_type") or ""
+                    se_biz = st.text_input("Business / Store Name", value=my_v_prof.get("name", ""), disabled=is_terminated)
+                    se_owner = st.text_input("Owner Name", value=my_v_prof.get("owner_name") or "", disabled=is_terminated)
+                    se_email = st.text_input("Email", value=my_v_prof.get("email", ""), disabled=is_terminated)
+                    se_phone = st.text_input("Phone", value=my_v_prof.get("phone", ""), disabled=is_terminated)
+                    se_cat = st.text_input("Vendor Category", value=curr_cat, disabled=is_terminated)
+                    se_tax = st.text_input("Tax / GST ID", value=my_v_prof.get("tax_id") or "", disabled=is_terminated)
+                    se_addr = st.text_area("Address", value=my_v_prof.get("address") or "", disabled=is_terminated)
+                    se_btn = st.form_submit_button("Save Store Profile", disabled=is_terminated)
+
+                    if se_btn and not is_terminated:
+                        se_payload = {
+                            "name": se_biz,
+                            "owner_name": se_owner or None,
+                            "email": se_email,
+                            "phone": se_phone,
+                            "category": se_cat or None,
+                            "tax_id": se_tax or None,
+                            "address": se_addr or None,
+                        }
+                        res_u, err_u = update_vendor_profile_action(int(my_v_prof["id"]), se_payload)
+                        if res_u:
+                            st.success("Your vendor profile has been updated.")
+                            st.rerun()
+                        else:
+                            st.error(f"Failed to update profile: {err_u}")
+
+            with tab_my_settle:
+                st.subheader("💰 My Vendor Settlement Ledger")
+                my_settle = api_get("/analytics/vendors/payouts") if (is_live_api and _api_reachable_this_run) else None
+                if my_settle and my_settle.get("settlements"):
+                    ms1, ms2, ms3 = st.columns(3)
+                    ms1.metric("💵 Net Sales", f"₹{my_settle.get('total_net_sales', 0.0):,.2f}")
+                    ms2.metric("🏛️ Platform Commission", f"₹{my_settle.get('total_platform_commission', 0.0):,.2f}")
+                    ms3.metric("🤝 Payable Payout", f"₹{my_settle.get('total_vendor_payouts', 0.0):,.2f}")
+                    st.dataframe(pd.DataFrame(my_settle["settlements"]), use_container_width=True, hide_index=True)
+                else:
+                    st.info("No settled transactions recorded for your vendor account yet.")
+
+    else:
+        st.title("🏢 Vendor Management")
+        st.caption("Review pending vendor onboarding applications, manage supplier directories, and enforce lifecycle governance.")
+
+        flash_msg = st.session_state.pop("vendor_gov_feedback", None)
+        if flash_msg:
+            st.success(f"✅ {flash_msg}")
+
+        df_vendors = get_vendors_list()
+        if not df_vendors.empty and "vendor_category" not in df_vendors.columns and "business_type" in df_vendors.columns:
+            df_vendors["vendor_category"] = df_vendors["business_type"]
+
+        pending_df = (
+            df_vendors[df_vendors["status"] == "PENDING_APPROVAL"].copy()
+            if (not df_vendors.empty and "status" in df_vendors.columns)
+            else pd.DataFrame()
+        )
+        operational_cnt = (
+            int(df_vendors["status"].isin(OPERATIONAL_VENDOR_STATUSES).sum())
+            if (not df_vendors.empty and "status" in df_vendors.columns)
+            else 0
+        )
+
+        col_v1, col_v2, col_v3, col_v4 = st.columns(4)
+        col_v1.metric("🏢 Total Vendors", len(df_vendors))
+        col_v2.metric("⏳ Pending Applications", len(pending_df))
+        col_v3.metric("✅ Operational Vendors", operational_cnt)
+        col_v4.metric("🌐 Onboarding Mode", "Live API" if _api_reachable_this_run else "DB / Local Mode")
+
+        if not pending_df.empty:
+            st.warning(
+                f"⏳ **Pending Applications Queue:** {len(pending_df)} vendor application(s) await administrator approval."
+            )
+
+        st.markdown("---")
+
+        tab_v_pending, tab_v_list, tab_v_add, tab_v_edit, tab_v_gov, tab_v_settle = st.tabs([
+            f"⏳ Pending Applications ({len(pending_df)})",
+            "📋 Vendor Directory",
+            "➕ Register Vendor",
+            "✏️ Edit Vendor",
+            "🛡️ Lifecycle & Governance",
+            "💰 Settlement Ledger",
+        ])
+
+        with tab_v_pending:
+            st.subheader("Pending Vendor Onboarding Applications")
+            st.caption("Review submitted store applications, provide verification feedback, and confirm approval or rejection.")
+
+            if pending_df.empty:
+                st.success("🎉 All vendor applications have been reviewed. No pending applications in the queue.")
+            else:
+                q_cols = [
+                    c for c in [
+                        "id", "name", "owner_name", "email", "vendor_category", "phone",
+                        "tax_id", "status", "compliance_status", "created_at",
+                    ]
+                    if c in pending_df.columns
+                ]
+                q_disp = pending_df[q_cols].rename(columns={
+                    "id": "Vendor ID",
+                    "name": "Business Name",
+                    "owner_name": "Owner Name",
+                    "email": "Email",
+                    "vendor_category": "Category",
+                    "phone": "Phone",
+                    "tax_id": "Tax / GST ID",
+                    "status": "Status",
+                    "compliance_status": "Compliance",
+                    "created_at": "Submitted At",
+                })
+                st.dataframe(q_disp, use_container_width=True, hide_index=True)
+
+                st.markdown("---")
+                pending_opts = {
+                    int(row["id"]): f"#{int(row['id'])} — {row['name']} ({row.get('owner_name') or 'Owner N/A'} • {row.get('email')})"
+                    for _, row in pending_df.iterrows()
+                }
+                sel_pid = st.selectbox(
+                    "Select Pending Application to Review",
+                    options=list(pending_opts.keys()),
+                    format_func=lambda x: pending_opts[x],
+                    key="sb_pending_vendor_id",
+                )
+                sel_row = pending_df[pending_df["id"] == sel_pid].iloc[0]
+
+                d1, d2, d3 = st.columns(3)
+                d1.markdown(f"**Business Name:** {sel_row.get('name')}<br>**Owner Name:** {sel_row.get('owner_name') or '—'}", unsafe_allow_html=True)
+                d2.markdown(f"**Email:** `{sel_row.get('email')}`<br>**Phone:** `{sel_row.get('phone')}`", unsafe_allow_html=True)
+                d3.markdown(
+                    f"**Category:** `{sel_row.get('vendor_category') or sel_row.get('business_type') or '—'}`<br>"
+                    f"**Tax / GST ID:** `{sel_row.get('tax_id') or 'Not Provided'}`<br>"
+                    f"**Submitted:** `{str(sel_row.get('created_at') or '—')[:19]}`",
+                    unsafe_allow_html=True,
+                )
+
+                tier_choices = ["TIER_STARTER", "TIER_STANDARD", "TIER_PREFERRED", "TIER_ENTERPRISE"]
+                curr_t = sel_row.get("commission_tier", "TIER_STANDARD")
+                t_idx = tier_choices.index(curr_t) if curr_t in tier_choices else 1
+
+                rev_c1, rev_c2 = st.columns([2, 1])
+                pending_notes = rev_c1.text_input(
+                    "Verification Feedback / Audit Notes",
+                    placeholder="Verification approval notes or mandatory rejection reason",
+                    key="pending_review_notes",
+                )
+                pending_tier = rev_c2.selectbox(
+                    "Commission Tier",
+                    options=tier_choices,
+                    index=t_idx,
+                    key="pending_review_tier",
+                )
+
+                act_c1, act_c2 = st.columns(2)
+                if act_c1.button("✅ Approve Application", key="btn_pending_approve", use_container_width=True):
+                    st.session_state["pending_confirm_action"] = {
+                        "vendor_id": int(sel_pid),
+                        "vendor_name": str(sel_row.get("name")),
+                        "owner_name": str(sel_row.get("owner_name") or "—"),
+                        "action": "APPROVE",
+                        "tier": pending_tier,
+                        "notes": (pending_notes or "").strip() or "Application verified and approved by administrator.",
+                    }
+
+                if act_c2.button("❌ Reject Application", key="btn_pending_reject", use_container_width=True):
+                    if not (pending_notes or "").strip():
+                        st.error("Verification/rejection feedback notes are required before rejecting an application.")
+                    else:
+                        st.session_state["pending_confirm_action"] = {
+                            "vendor_id": int(sel_pid),
+                            "vendor_name": str(sel_row.get("name")),
+                            "owner_name": str(sel_row.get("owner_name") or "—"),
+                            "action": "REJECT",
+                            "tier": pending_tier,
+                            "notes": pending_notes.strip(),
+                        }
+
+                confirm_ctx = st.session_state.get("pending_confirm_action")
+                if confirm_ctx and confirm_ctx.get("vendor_id") == int(sel_pid):
+                    action_verb = "APPROVE" if confirm_ctx["action"] == "APPROVE" else "REJECT"
+                    st.warning(
+                        f"⚠️ **Confirm Application {action_verb}:** Are you sure you want to **{action_verb}** "
+                        f"**{confirm_ctx['vendor_name']}** (Vendor ID: `{confirm_ctx['vendor_id']}`, Owner: `{confirm_ctx['owner_name']}`)?"
+                        f"\n\n**Verification Notes:** {confirm_ctx['notes']}"
+                    )
+                    cf1, cf2 = st.columns(2)
+                    if cf1.button(f"Confirm {action_verb.title()}", key="btn_pending_confirm_yes", use_container_width=True):
+                        if confirm_ctx["action"] == "APPROVE":
+                            t_payload = {
+                                "status": "ACTIVE",
+                                "compliance_status": "VERIFIED",
+                                "commission_tier": confirm_ctx["tier"],
+                                "verification_notes": confirm_ctx["notes"],
+                            }
+                        else:
+                            t_payload = {
+                                "status": "REJECTED",
+                                "compliance_status": "FLAGGED",
+                                "verification_notes": confirm_ctx["notes"],
+                            }
+                        res_t, err_t = transition_vendor_application_status(int(sel_pid), t_payload)
+                        st.session_state.pop("pending_confirm_action", None)
+                        if res_t:
+                            st.session_state["vendor_gov_feedback"] = (
+                                f"Vendor '{confirm_ctx['vendor_name']}' (#{sel_pid}) updated to {res_t.get('status')} "
+                                f"— Feedback: {confirm_ctx['notes']}"
+                            )
+                            st.rerun()
+                        else:
+                            st.error(f"Status transition failed: {err_t}")
+
+                    if cf2.button("Cancel", key="btn_pending_confirm_no", use_container_width=True):
+                        st.session_state.pop("pending_confirm_action", None)
+                        st.rerun()
+
+        with tab_v_list:
+            st.subheader("All Registered Vendors")
+            if not df_vendors.empty:
+                status_filter_opts = ["ALL", "PENDING_APPROVAL", "ACTIVE", "LEGACY_ACTIVE", "REJECTED", "SUSPENDED", "TERMINATED"]
+                sel_dir_status = st.selectbox("Filter by Lifecycle Status", options=status_filter_opts, index=0, key="dir_status_filter")
+                df_dir = df_vendors.copy()
+                if sel_dir_status != "ALL" and "status" in df_dir.columns:
+                    df_dir = df_dir[df_dir["status"] == sel_dir_status]
+                if "status" in df_dir.columns:
+                    df_dir["status_label"] = df_dir["status"].apply(format_vendor_status_label)
+                display_cols = [
+                    c for c in [
+                        "id", "name", "owner_name", "vendor_category", "email", "phone", "tax_id",
+                        "status_label", "status", "commission_tier", "commission_rate", "compliance_status",
+                        "verification_notes", "created_at",
+                    ]
+                    if c in df_dir.columns
+                ]
+                st.dataframe(df_dir[display_cols], use_container_width=True, hide_index=True)
+            else:
+                st.info("No vendors found.")
+
+        with tab_v_add:
+            st.subheader("Register a New Vendor (Administrator)")
             with st.form("form_add_vendor", clear_on_submit=True):
                 v_name = st.text_input("Vendor Business Name*", placeholder="e.g. Apex Logistics & Tech")
+                v_owner = st.text_input("Owner Name", placeholder="e.g. Priya Sharma")
                 v_email = st.text_input("Official Email Address*", placeholder="e.g. contact@apextech.com")
                 v_phone = st.text_input("Contact Phone Number*", placeholder="e.g. +91-9876543210")
+                v_cat = st.selectbox("Vendor Category / Business Type", options=VENDOR_CATEGORY_OPTIONS, key="admin_add_v_cat")
+                v_tax = st.text_input("Tax / GST ID (Optional)", placeholder="e.g. 27AAACM1234F1Z5")
+                v_tier = st.selectbox("Commission Tier", options=["TIER_STARTER", "TIER_STANDARD", "TIER_PREFERRED", "TIER_ENTERPRISE"], index=1)
                 v_addr = st.text_area("Registered Address", placeholder="Street, City, State, Country")
                 submitted = st.form_submit_button("Register Vendor")
 
@@ -1031,90 +1983,135 @@ elif selected_page == "🏢 Vendor Management":
                     if not v_name or not v_email or not v_phone:
                         st.error("Please fill in all required fields (Name, Email, Phone).")
                     else:
-                        payload = {"name": v_name, "email": v_email, "phone": v_phone, "address": v_addr or None}
+                        payload = {
+                            "name": v_name,
+                            "owner_name": v_owner or None,
+                            "email": v_email,
+                            "phone": v_phone,
+                            "category": v_cat,
+                            "business_type": v_cat,
+                            "tax_id": v_tax or None,
+                            "commission_tier": v_tier,
+                            "address": v_addr or None,
+                        }
                         res, err = api_post("/vendors/", payload)
                         if res:
-                            st.success(f"Vendor '{v_name}' successfully registered with ID: {res.get('id')}!")
+                            st.session_state["vendor_gov_feedback"] = f"Vendor '{v_name}' registered (ID: {res.get('id')}, Status: {res.get('status')})."
                             st.rerun()
                         else:
                             st.error(f"Failed to register vendor: {err}")
 
-    with tab_v_edit:
-        st.subheader("Update Existing Vendor Details")
-        if not is_live_api:
-            st.warning("⚠️ Editing vendor records requires Live API mode.")
-        elif df_vendors.empty:
-            st.info("No vendors available to edit.")
-        else:
-            vendor_map = {row["id"]: f"{row['name']} (ID: {row['id']})" for _, row in df_vendors.iterrows()}
-            selected_v_id = st.selectbox("Select Vendor to Edit", options=list(vendor_map.keys()), format_func=lambda x: vendor_map[x])
+        with tab_v_edit:
+            st.subheader("Update Existing Vendor Details")
+            if df_vendors.empty:
+                st.info("No vendors available to edit.")
+            else:
+                vendor_map = {row["id"]: f"{row['name']} (ID: {row['id']} • {row.get('status', 'ACTIVE')})" for _, row in df_vendors.iterrows()}
+                selected_v_id = st.selectbox("Select Vendor to Edit", options=list(vendor_map.keys()), format_func=lambda x: vendor_map[x], key="sb_admin_edit_vid")
 
-            curr_v = df_vendors[df_vendors["id"] == selected_v_id].iloc[0]
+                curr_v = df_vendors[df_vendors["id"] == selected_v_id].iloc[0]
+                is_v_term = str(curr_v.get("status", "")).upper() == "TERMINATED"
+                if is_v_term:
+                    st.error("⛔ Terminated vendor records cannot be modified.")
 
-            with st.form("form_edit_vendor"):
-                new_v_name = st.text_input("Vendor Name", value=curr_v["name"])
-                new_v_email = st.text_input("Email", value=curr_v["email"])
-                new_v_phone = st.text_input("Phone", value=curr_v["phone"])
-                new_v_addr = st.text_area("Address", value=curr_v.get("address", "") if pd.notna(curr_v.get("address")) else "")
-                update_btn = st.form_submit_button("Save Vendor Changes")
+                with st.form("form_edit_vendor"):
+                    curr_v_cat = curr_v.get("vendor_category") or curr_v.get("business_type") or ""
+                    new_v_name = st.text_input("Vendor Business Name", value=curr_v["name"], disabled=is_v_term)
+                    new_v_owner = st.text_input("Owner Name", value=str(curr_v.get("owner_name")) if pd.notna(curr_v.get("owner_name")) and curr_v.get("owner_name") else "", disabled=is_v_term)
+                    new_v_email = st.text_input("Email", value=curr_v["email"], disabled=is_v_term)
+                    new_v_phone = st.text_input("Phone", value=curr_v["phone"], disabled=is_v_term)
+                    new_v_cat = st.text_input("Vendor Category / Business Type", value=str(curr_v_cat) if pd.notna(curr_v_cat) else "", disabled=is_v_term)
+                    new_v_tax = st.text_input("Tax / GST ID", value=str(curr_v.get("tax_id")) if pd.notna(curr_v.get("tax_id")) and curr_v.get("tax_id") else "", disabled=is_v_term)
+                    new_v_addr = st.text_area("Address", value=curr_v.get("address", "") if pd.notna(curr_v.get("address")) else "", disabled=is_v_term)
+                    update_btn = st.form_submit_button("Save Vendor Changes", disabled=is_v_term)
 
-                if update_btn:
-                    payload = {"name": new_v_name, "email": new_v_email, "phone": new_v_phone, "address": new_v_addr or None}
-                    res, err = api_put(f"/vendors/{selected_v_id}", payload)
-                    if res:
-                        st.success(f"Vendor #{selected_v_id} successfully updated!")
-                        st.rerun()
-                    else:
-                        st.error(f"Failed to update vendor: {err}")
-
-    with tab_v_gov:
-        st.subheader("🛡️ Vendor Lifecycle Governance & State Machine")
-        st.caption("Control operational vendor status (ACTIVE, SUSPENDED, TERMINATED, REJECTED) and compliance auditing.")
-        if not is_live_api:
-            st.warning("⚠️ Vendor lifecycle management requires Live API mode.")
-        elif df_vendors.empty:
-            st.info("No vendors available.")
-        else:
-            vendor_map_gov = {row["id"]: f"{row['name']} (Current: {row.get('status', 'ACTIVE')})" for _, row in df_vendors.iterrows()}
-            selected_gov_id = st.selectbox("Select Vendor for Governance Review", options=list(vendor_map_gov.keys()), format_func=lambda x: vendor_map_gov[x], key="sb_gov_vendor")
-            curr_gov_v = df_vendors[df_vendors["id"] == selected_gov_id].iloc[0]
-
-            with st.form("form_vendor_status_transition"):
-                st.write(f"**Current Status:** `{curr_gov_v.get('status', 'ACTIVE')}` | **Tier:** `{curr_gov_v.get('commission_tier', 'TIER_STANDARD')}` | **Compliance:** `{curr_gov_v.get('compliance_status', 'VERIFIED')}`")
-                target_status = st.selectbox("Target Operational Status", ["ACTIVE", "SUSPENDED", "TERMINATED", "REJECTED"], key="sb_target_status")
-                target_tier = st.selectbox("Commission Tier", ["TIER_STARTER", "TIER_STANDARD", "TIER_PREFERRED", "TIER_ENTERPRISE"], index=["TIER_STARTER", "TIER_STANDARD", "TIER_PREFERRED", "TIER_ENTERPRISE"].index(curr_gov_v.get("commission_tier", "TIER_STANDARD")) if curr_gov_v.get("commission_tier") in ["TIER_STARTER", "TIER_STANDARD", "TIER_PREFERRED", "TIER_ENTERPRISE"] else 1)
-                gov_notes = st.text_input("Governance Audit Notes*", placeholder="Reason for status change or tier adjustment")
-                gov_submit = st.form_submit_button("Execute Status Transition")
-
-                if gov_submit:
-                    if not gov_notes:
-                        st.error("Audit notes are mandatory for status transitions.")
-                    else:
+                    if update_btn and not is_v_term:
                         payload = {
-                            "status": target_status,
-                            "commission_tier": target_tier,
-                            "verification_notes": gov_notes,
+                            "name": new_v_name,
+                            "owner_name": new_v_owner or None,
+                            "email": new_v_email,
+                            "phone": new_v_phone,
+                            "category": new_v_cat or None,
+                            "business_type": new_v_cat or None,
+                            "tax_id": new_v_tax or None,
+                            "address": new_v_addr or None,
                         }
-                        res, err = api_put(f"/vendors/{selected_gov_id}/status", payload)
+                        res, err = update_vendor_profile_action(int(selected_v_id), payload)
                         if res:
-                            st.success(f"Vendor #{selected_gov_id} successfully transitioned to {target_status} ({target_tier})!")
+                            st.session_state["vendor_gov_feedback"] = f"Vendor #{selected_v_id} details updated."
                             st.rerun()
                         else:
-                            st.error(f"Status transition rejected: {err}")
+                            st.error(f"Failed to update vendor: {err}")
 
-    with tab_v_settle:
-        st.subheader("💰 Multi-Vendor Settlement Sheet & Payouts")
-        st.caption("Auditable financial ledger of gross sales, discount deductions, refund adjustments, and platform commissions.")
-        settle_data = api_get("/analytics/vendors/payouts") if is_live_api else None
-        if settle_data and settle_data.get("settlements"):
-            s_c1, s_c2, s_c3 = st.columns(3)
-            s_c1.metric("💵 Total Net Sales", f"₹{settle_data.get('total_net_sales', 0.0):,.2f}")
-            s_c2.metric("🏛️ Platform Commission", f"₹{settle_data.get('total_platform_commission', 0.0):,.2f}")
-            s_c3.metric("🤝 Total Payable Payouts", f"₹{settle_data.get('total_vendor_payouts', 0.0):,.2f}")
+        with tab_v_gov:
+            st.subheader("🛡️ Vendor Lifecycle Governance & State Machine")
+            st.caption("Control operational vendor status transitions and compliance auditing.")
+            if df_vendors.empty:
+                st.info("No vendors available.")
+            else:
+                from app.services.vendor_service import ALLOWED_TRANSITIONS
 
-            st.dataframe(pd.DataFrame(settle_data["settlements"]), use_container_width=True)
-        else:
-            st.info("No vendor settlement records available.")
+                vendor_map_gov = {
+                    row["id"]: f"{row['name']} ({format_vendor_status_label(row.get('status', 'ACTIVE'))})"
+                    for _, row in df_vendors.iterrows()
+                }
+                selected_gov_id = st.selectbox("Select Vendor for Governance Review", options=list(vendor_map_gov.keys()), format_func=lambda x: vendor_map_gov[x], key="sb_gov_vendor")
+                curr_gov_v = df_vendors[df_vendors["id"] == selected_gov_id].iloc[0]
+                curr_gov_status = str(curr_gov_v.get("status", "ACTIVE")).upper()
+                legal_targets = sorted(list(ALLOWED_TRANSITIONS.get(curr_gov_status, set())))
+                target_choices = [curr_gov_status] + legal_targets
+
+                with st.form("form_vendor_status_transition"):
+                    st.write(
+                        f"**Current Status:** `{format_vendor_status_label(curr_gov_status)}` | "
+                        f"**Tier:** `{curr_gov_v.get('commission_tier', 'TIER_STANDARD')}` | "
+                        f"**Compliance:** `{curr_gov_v.get('compliance_status', 'VERIFIED')}`"
+                    )
+                    if not legal_targets:
+                        st.info("Vendor is in TERMINAL state (`TERMINATED`); no further status transitions are permitted.")
+                    target_status = st.selectbox("Target Operational Status", target_choices, key="sb_target_status")
+                    target_tier = st.selectbox(
+                        "Commission Tier",
+                        ["TIER_STARTER", "TIER_STANDARD", "TIER_PREFERRED", "TIER_ENTERPRISE"],
+                        index=["TIER_STARTER", "TIER_STANDARD", "TIER_PREFERRED", "TIER_ENTERPRISE"].index(curr_gov_v.get("commission_tier", "TIER_STANDARD"))
+                        if curr_gov_v.get("commission_tier") in ["TIER_STARTER", "TIER_STANDARD", "TIER_PREFERRED", "TIER_ENTERPRISE"] else 1,
+                    )
+                    gov_notes = st.text_input("Governance Audit Notes*", placeholder="Reason for status change or tier adjustment")
+                    gov_submit = st.form_submit_button("Execute Status Transition", disabled=(len(legal_targets) == 0 and target_status == curr_gov_status))
+
+                    if gov_submit:
+                        if not gov_notes:
+                            st.error("Audit notes are mandatory for status transitions.")
+                        else:
+                            payload = {
+                                "status": target_status,
+                                "commission_tier": target_tier,
+                                "verification_notes": gov_notes,
+                            }
+                            if target_status == "ACTIVE":
+                                payload["compliance_status"] = "VERIFIED"
+                            elif target_status == "REJECTED":
+                                payload["compliance_status"] = "FLAGGED"
+                            res, err = transition_vendor_application_status(int(selected_gov_id), payload)
+                            if res:
+                                st.session_state["vendor_gov_feedback"] = f"Vendor #{selected_gov_id} transitioned to {target_status} ({target_tier})."
+                                st.rerun()
+                            else:
+                                st.error(f"Status transition rejected: {err}")
+
+        with tab_v_settle:
+            st.subheader("💰 Multi-Vendor Settlement Sheet & Payouts")
+            st.caption("Auditable financial ledger of gross sales, discount deductions, refund adjustments, and platform commissions.")
+            settle_data = api_get("/analytics/vendors/payouts") if (is_live_api and _api_reachable_this_run) else None
+            if settle_data and settle_data.get("settlements"):
+                s_c1, s_c2, s_c3 = st.columns(3)
+                s_c1.metric("💵 Total Net Sales", f"₹{settle_data.get('total_net_sales', 0.0):,.2f}")
+                s_c2.metric("🏛️ Platform Commission", f"₹{settle_data.get('total_platform_commission', 0.0):,.2f}")
+                s_c3.metric("🤝 Total Payable Payouts", f"₹{settle_data.get('total_vendor_payouts', 0.0):,.2f}")
+
+                st.dataframe(pd.DataFrame(settle_data["settlements"]), use_container_width=True)
+            else:
+                st.info("No vendor settlement records available.")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1124,7 +2121,15 @@ elif selected_page == "📦 Product Management":
     st.title("📦 Product Catalog Management")
     st.caption("Manage product items, category taxonomy, prices, and vendor associations.")
 
-    df_products = get_products_list()
+    vendor_ops_allowed = True
+    my_v_prof_prod = None
+    if current_role == "VENDOR":
+        my_v_prof_prod = fetch_my_vendor_profile()
+        vendor_ops_allowed = is_vendor_operational(my_v_prof_prod)
+        render_vendor_status_banner(my_v_prof_prod)
+        st.markdown("---")
+
+    df_products = get_products_list(scope_to_vendor=True)
     df_vendors = get_vendors_list()
 
     p1, p2, p3 = st.columns(3)
@@ -1139,9 +2144,8 @@ elif selected_page == "📦 Product Management":
     tab_p_list, tab_p_add, tab_p_edit, tab_p_norm = st.tabs(["📋 Catalog Table", "➕ Add Product", "✏️ Edit Product", "🏷️ Catalog Normalizer & Audit (Stage 5)"])
 
     with tab_p_list:
-        st.subheader("Active Catalog")
+        st.subheader("My Vendor Catalog" if current_role == "VENDOR" else "Active Catalog")
         if not df_products.empty:
-            # Merge with vendor name for readable display
             if not df_vendors.empty and "vendor_id" in df_products.columns:
                 merged_p = df_products.merge(df_vendors[["id", "name"]], left_on="vendor_id", right_on="id", suffixes=("", "_vendor"))
                 display_cols = [c for c in ["id", "name", "category", "price", "name_vendor", "description"] if c in merged_p.columns]
@@ -1149,34 +2153,64 @@ elif selected_page == "📦 Product Management":
             else:
                 st.dataframe(df_products, use_container_width=True)
         else:
-            st.info("No products found in the catalog.")
+            st.info("No products found for your store." if current_role == "VENDOR" else "No products found in the catalog.")
 
     with tab_p_add:
         st.subheader("Add a New Product to Catalog")
-        if not is_live_api:
+        if current_role == "CUSTOMER":
+            st.error("🔒 Access Denied: Customers cannot create products.")
+        elif not is_live_api:
             st.warning("⚠️ Adding products writes to PostgreSQL. Switch to Live API mode to create products.")
+        elif current_role == "VENDOR" and not vendor_ops_allowed:
+            st.error(
+                f"⛔ **Restricted Action:** You cannot list new products while your vendor status is "
+                f"`{my_v_prof_prod.get('status') if my_v_prof_prod else 'UNAPPROVED'}`. "
+                "Administrator approval (`ACTIVE`) is required first."
+            )
+            with st.form("form_add_product_disabled"):
+                st.text_input("Assigned Vendor", value=f"{my_v_prof_prod.get('name', 'My Store')} (ID: {my_v_prof_prod.get('id')})" if my_v_prof_prod else "Unassigned", disabled=True)
+                st.text_input("Product Name*", placeholder="Disabled until vendor approved", disabled=True)
+                st.number_input("Unit Price (₹)*", min_value=1.0, value=999.0, disabled=True)
+                st.text_input("Category*", placeholder="Electronics", disabled=True)
+                st.text_area("Product Description", disabled=True)
+                st.form_submit_button("Add Product (Approval Required)", disabled=True)
         elif df_vendors.empty:
-            st.error("No registered vendors found. You must register at least one vendor first.")
+            st.error("No registered vendors found. At least one approved vendor is required.")
         else:
-            vendor_options = {row["id"]: f"{row['name']} (ID: {row['id']})" for _, row in df_vendors.iterrows()}
+            if current_role == "VENDOR" and my_v_prof_prod:
+                vendor_options = {int(my_v_prof_prod["id"]): f"{my_v_prof_prod['name']} (ID: {my_v_prof_prod['id']})"}
+            else:
+                vendor_options = {
+                    int(row["id"]): f"{row['name']} (ID: {row['id']} • {row.get('status', 'ACTIVE')})"
+                    for _, row in df_vendors.iterrows()
+                }
 
             with st.form("form_add_product", clear_on_submit=True):
                 p_name = st.text_input("Product Name*", placeholder="e.g. Ergonomic Office Chair")
                 p_price = st.number_input("Unit Price (₹)*", min_value=1.0, value=999.0, step=50.0)
                 p_cat = st.text_input("Category*", placeholder="e.g. Furniture, Electronics")
-                p_vid = st.selectbox("Assigned Vendor*", options=list(vendor_options.keys()), format_func=lambda x: vendor_options[x])
+                p_vid = st.selectbox(
+                    "Assigned Vendor*",
+                    options=list(vendor_options.keys()),
+                    format_func=lambda x: vendor_options[x],
+                    disabled=(current_role == "VENDOR"),
+                    key="sb_add_prod_vid",
+                )
                 p_desc = st.text_area("Product Description", placeholder="Key specifications and product features")
                 p_sub = st.form_submit_button("Add Product")
 
                 if p_sub:
-                    if not p_name or p_price <= 0:
+                    if current_role == "VENDOR" and not vendor_ops_allowed:
+                        st.error("Non-operational vendors cannot create products.")
+                    elif not p_name or p_price <= 0:
                         st.error("Please provide a valid product name and positive price.")
                     else:
+                        target_vid = int(my_v_prof_prod["id"]) if (current_role == "VENDOR" and my_v_prof_prod) else int(p_vid)
                         payload = {
                             "name": p_name,
                             "price": float(p_price),
                             "category": p_cat or "General",
-                            "vendor_id": int(p_vid),
+                            "vendor_id": target_vid,
                             "description": p_desc or None,
                         }
                         res, err = api_post("/products/", payload)
@@ -1190,11 +2224,17 @@ elif selected_page == "📦 Product Management":
         st.subheader("Edit Existing Product Details")
         if not is_live_api:
             st.warning("⚠️ Editing products requires Live API mode.")
+        elif current_role == "VENDOR" and not vendor_ops_allowed:
+            st.error(
+                f"⛔ **Restricted Action:** Editing products is disabled while your vendor status is "
+                f"`{my_v_prof_prod.get('status') if my_v_prof_prod else 'UNAPPROVED'}`."
+            )
+            st.button("Save Product Changes (Approval Required)", disabled=True, key="btn_edit_prod_locked")
         elif df_products.empty:
             st.info("No products available to edit.")
         else:
             prod_map = {row["id"]: f"{row['name']} (ID: {row['id']}) — ₹{row['price']:,.2f}" for _, row in df_products.iterrows()}
-            selected_pid = st.selectbox("Select Product", options=list(prod_map.keys()), format_func=lambda x: prod_map[x])
+            selected_pid = st.selectbox("Select Product", options=list(prod_map.keys()), format_func=lambda x: prod_map[x], key="sb_edit_prod_id")
 
             curr_p = df_products[df_products["id"] == selected_pid].iloc[0]
 
@@ -1206,23 +2246,26 @@ elif selected_page == "📦 Product Management":
                 save_p_btn = st.form_submit_button("Save Product Changes")
 
                 if save_p_btn:
-                    payload = {
-                        "name": edit_name,
-                        "price": float(edit_price),
-                        "category": edit_cat or None,
-                        "description": edit_desc or None,
-                    }
-                    res, err = api_put(f"/products/{selected_pid}", payload)
-                    if res:
-                        st.success(f"Product #{selected_pid} successfully updated!")
-                        st.rerun()
+                    if current_role == "VENDOR" and not vendor_ops_allowed:
+                        st.error("Non-operational vendors cannot modify products.")
                     else:
-                        st.error(f"Failed to update product: {err}")
+                        payload = {
+                            "name": edit_name,
+                            "price": float(edit_price),
+                            "category": edit_cat or None,
+                            "description": edit_desc or None,
+                        }
+                        res, err = api_put(f"/products/{selected_pid}", payload)
+                        if res:
+                            st.success(f"Product #{selected_pid} successfully updated!")
+                            st.rerun()
+                        else:
+                            st.error(f"Failed to update product: {err}")
 
     with tab_p_norm:
         st.subheader("🏷️ Catalog Normalizer & Attribute Audit (Stage 5)")
         st.caption("Aggregates vendor catalogs into canonical 2-tier categories, extracts physical units, infers brands, flags price anomalies and duplicate listings.")
-        norm_data = api_get("/catalog/normalize") if is_live_api else None
+        norm_data = api_get("/catalog/normalize") if (is_live_api and _api_reachable_this_run) else None
         if not norm_data:
             try:
                 from app.database import SessionLocal
@@ -1236,18 +2279,24 @@ elif selected_page == "📦 Product Management":
                 pass
 
         if norm_data:
+            prod_items_norm = norm_data.get("products", [])
+            if current_role == "VENDOR":
+                own_pids = set(df_products["id"].tolist()) if not df_products.empty else set()
+                prod_items_norm = [item for item in prod_items_norm if item.get("product_id") in own_pids]
+
             n1, n2, n3, n4, n5 = st.columns(5)
-            n1.metric("📦 Products Inspected", norm_data.get("total_products_inspected", 0))
-            n2.metric("🏷️ Categorized", norm_data.get("categories_normalized_count", 0))
-            n3.metric("📏 Units Extracted", norm_data.get("units_extracted_count", 0))
-            n4.metric("🔍 Near-Duplicates", norm_data.get("duplicate_candidates_found", 0))
-            n5.metric("⭐ Quality Score", f"{norm_data.get('average_attribute_quality_score', 0.0):.1f}/100")
+            n1.metric("📦 Products Inspected", len(prod_items_norm) if current_role == "VENDOR" else norm_data.get("total_products_inspected", 0))
+            n2.metric("🏷️ Categorized", len(prod_items_norm) if current_role == "VENDOR" else norm_data.get("categories_normalized_count", 0))
+            n3.metric("📏 Units Extracted", sum(1 for i in prod_items_norm if i.get("measurement", {}).get("has_measurement")) if current_role == "VENDOR" else norm_data.get("units_extracted_count", 0))
+            n4.metric("🔍 Near-Duplicates", "Scoped" if current_role == "VENDOR" else norm_data.get("duplicate_candidates_found", 0))
+            avg_q = (sum(i.get("quality_score", 0.0) for i in prod_items_norm) / len(prod_items_norm)) if (current_role == "VENDOR" and prod_items_norm) else norm_data.get("average_attribute_quality_score", 0.0)
+            n5.metric("⭐ Quality Score", f"{avg_q:.1f}/100")
 
             st.caption(f"ℹ️ {norm_data.get('normalization_policy_note', '')}")
 
-            if norm_data.get("products"):
+            if prod_items_norm:
                 items_table = []
-                for item in norm_data["products"]:
+                for item in prod_items_norm:
                     meas = item.get("measurement", {})
                     meas_str = f"{meas.get('normalized_value', '')} {meas.get('normalized_unit', '')}" if meas.get("has_measurement") else "—"
                     items_table.append({
@@ -1263,6 +2312,8 @@ elif selected_page == "📦 Product Management":
                         "Audit Flags": ", ".join(item.get("flags", [])) if item.get("flags") else "Clean",
                     })
                 st.dataframe(pd.DataFrame(items_table), use_container_width=True)
+            else:
+                st.info("No vendor products available for attribute audit.")
         else:
             st.info("Catalog normalizer data unavailable.")
 
@@ -1274,62 +2325,60 @@ elif selected_page == "📋 Inventory Management":
     st.title("📋 Inventory Control & Stock Auditing")
     st.caption("Centralized inventory levels, warehouse restock logging, depletion alerts, and dynamic replenishment recommendations.")
 
-    inv_status = api_get("/analytics/inventory/status") if is_live_api else None
-    if not inv_status and not csv_data["inventory"].empty:
-        merged_inv = csv_data["inventory"].merge(csv_data["products"], left_on="product_id", right_on="id")
-        inv_status = [
-            {
-                "product_id": int(r["product_id"]),
-                "product_name": r["name"],
-                "price": float(r["price"]),
-                "current_stock": int(r["current_stock"]),
-                "reorder_level": int(r["reorder_level"]),
-                "warehouse": r.get("warehouse", "Main"),
-                "stock_value": round(float(r["current_stock"]) * float(r["price"]), 2),
-                "status": "HEALTHY" if r["current_stock"] > r["reorder_level"] else ("LOW_STOCK" if r["current_stock"] > 0 else "OUT_OF_STOCK"),
-            }
-            for _, r in merged_inv.iterrows()
-        ]
-
-    if inv_status:
-        df_status = pd.DataFrame(inv_status)
-        tot_units = df_status["current_stock"].sum()
-        tot_val = df_status["stock_value"].sum()
-        low_count = len(df_status[df_status["status"] != "HEALTHY"])
-        healthy_count = len(df_status[df_status["status"] == "HEALTHY"])
-
-        i1, i2, i3, i4 = st.columns(4)
-        i1.metric("📦 Total Stock Units", f"{tot_units:,}")
-        i2.metric("💰 Total Inventory Value", f"₹{tot_val:,.2f}")
-        i3.metric("🟢 Healthy Stock Items", healthy_count)
-        i4.metric("🚨 Low / Out of Stock", low_count, delta=-low_count if low_count > 0 else 0, delta_color="inverse")
-
+    inv_ops_allowed = True
+    my_v_prof_inv = None
+    if current_role == "VENDOR":
+        my_v_prof_inv = fetch_my_vendor_profile()
+        inv_ops_allowed = is_vendor_operational(my_v_prof_inv)
+        render_vendor_status_banner(my_v_prof_inv)
         st.markdown("---")
 
-        # Active Low Stock Alerts Banner
-        alerts = [item for item in inv_status if item["status"] != "HEALTHY"]
-        if alerts:
-            st.error(f"🚨 **Action Required:** {len(alerts)} item(s) are at or below reorder threshold!")
-            df_al = pd.DataFrame(alerts)[["product_name", "warehouse", "current_stock", "reorder_level", "status"]]
-            st.dataframe(df_al, use_container_width=True)
+    inv_status = get_inventory_status_records()
 
-        tab_inv_grid, tab_inv_intel, tab_inv_move, tab_inv_audit, tab_inv_replenish = st.tabs([
-            "📊 Current Stock Levels",
-            "📈 Inventory Intelligence",
-            "📥 Log Stock Movement / Restock",
-            "📜 Movement Audit Trail",
-            "🔄 Replenishment Recommendations",
-        ])
+    df_status = pd.DataFrame(inv_status) if inv_status else pd.DataFrame(columns=[
+        "product_id", "product_name", "warehouse", "current_stock", "reorder_level", "stock_value", "status"
+    ])
+    tot_units = int(df_status["current_stock"].sum()) if not df_status.empty else 0
+    tot_val = float(df_status["stock_value"].sum()) if not df_status.empty else 0.0
+    low_count = len(df_status[df_status["status"] != "HEALTHY"]) if not df_status.empty else 0
+    healthy_count = len(df_status[df_status["status"] == "HEALTHY"]) if not df_status.empty else 0
 
-        with tab_inv_grid:
-            st.subheader("Warehouse Stock Levels")
+    i1, i2, i3, i4 = st.columns(4)
+    i1.metric("📦 Total Stock Units", f"{tot_units:,}")
+    i2.metric("💰 Total Inventory Value", f"₹{tot_val:,.2f}")
+    i3.metric("🟢 Healthy Stock Items", healthy_count)
+    i4.metric("🚨 Low / Out of Stock", low_count, delta=-low_count if low_count > 0 else 0, delta_color="inverse")
+
+    st.markdown("---")
+
+    # Active Low Stock Alerts Banner
+    alerts = [item for item in inv_status if item.get("status") != "HEALTHY"] if inv_status else []
+    if alerts:
+        st.error(f"🚨 **Action Required:** {len(alerts)} item(s) are at or below reorder threshold!")
+        df_al = pd.DataFrame(alerts)[["product_name", "warehouse", "current_stock", "reorder_level", "status"]]
+        st.dataframe(df_al, use_container_width=True)
+
+    tab_inv_grid, tab_inv_intel, tab_inv_move, tab_inv_audit, tab_inv_replenish = st.tabs([
+        "📊 Current Stock Levels",
+        "📈 Inventory Intelligence",
+        "📥 Log Stock Movement / Restock",
+        "📜 Movement Audit Trail",
+        "🔄 Replenishment Recommendations",
+    ])
+
+    with tab_inv_grid:
+        st.subheader("Warehouse Stock Levels")
+        if not df_status.empty:
             st.dataframe(
                 df_status[["product_id", "product_name", "warehouse", "current_stock", "reorder_level", "stock_value", "status"]],
                 use_container_width=True,
             )
+        else:
+            st.info("No inventory items recorded for this scope yet.")
 
-        with tab_inv_intel:
-            st.subheader("Inventory Distribution & Stock Health")
+    with tab_inv_intel:
+        st.subheader("Inventory Distribution & Stock Health")
+        if not df_status.empty:
             inv_col1, inv_col2 = st.columns(2)
             with inv_col1:
                 status_counts = df_status["status"].value_counts().reset_index()
@@ -1362,23 +2411,40 @@ elif selected_page == "📋 Inventory Management":
                 )
                 fig_val.update_layout(margin=dict(l=20, r=20, t=40, b=30), showlegend=False, xaxis_tickangle=-30)
                 st.plotly_chart(fig_val, use_container_width=True)
+        else:
+            st.info("No inventory analytics to display yet.")
 
-        with tab_inv_move:
-            st.subheader("Record Inbound Restock or Warehouse Adjustment")
-            if not is_live_api:
-                st.warning("⚠️ Logging stock movements writes directly to PostgreSQL. Switch to Live API mode to update stock.")
-            else:
-                with st.form("form_log_movement", clear_on_submit=True):
-                    m_p_map = {item["product_id"]: f"{item['product_name']} (Current Stock: {item['current_stock']})" for item in inv_status}
-                    m_pid = st.selectbox("Product to Adjust", options=list(m_p_map.keys()), format_func=lambda x: m_p_map[x])
-                    m_type = st.selectbox("Movement Type", ["RESTOCK", "ADJUSTMENT", "TRANSFER", "RETURN"])
-                    m_qty = st.number_input("Quantity Units", min_value=1, value=25, step=5)
-                    m_src = st.text_input("Source Warehouse", value="Supplier / Vendor")
-                    m_tgt = st.text_input("Target Warehouse", value="Main Distribution Center")
-                    m_notes = st.text_area("Audit Notes", placeholder="e.g. Purchase Order #PO-9481 replenishment")
-                    m_submit = st.form_submit_button("Record Movement & Update Stock")
+    with tab_inv_move:
+        st.subheader("Record Inbound Restock or Warehouse Adjustment")
+        if not is_live_api:
+            st.warning("⚠️ Logging stock movements writes directly to PostgreSQL. Switch to Live API mode to update stock.")
+        elif current_role == "VENDOR" and not inv_ops_allowed:
+            st.error(
+                f"⛔ **Restricted Action:** Stock movements are locked while your vendor status is "
+                f"`{my_v_prof_inv.get('status') if my_v_prof_inv else 'UNAPPROVED'}`. Administrator approval (`ACTIVE`) is required."
+            )
+            with st.form("form_log_movement_locked"):
+                st.selectbox("Product to Adjust", options=["Unavailable until approved"], disabled=True)
+                st.selectbox("Movement Type", ["RESTOCK", "ADJUSTMENT", "TRANSFER", "RETURN"], disabled=True)
+                st.number_input("Quantity Units", min_value=1, value=25, disabled=True)
+                st.form_submit_button("Record Movement & Update Stock (Approval Required)", disabled=True)
+        elif not inv_status:
+            st.info("No products found in your inventory yet. List an approved product first to manage stock.")
+        else:
+            with st.form("form_log_movement", clear_on_submit=True):
+                m_p_map = {item["product_id"]: f"{item['product_name']} (Current Stock: {item['current_stock']})" for item in inv_status}
+                m_pid = st.selectbox("Product to Adjust", options=list(m_p_map.keys()), format_func=lambda x: m_p_map[x], key="sb_inv_move_pid")
+                m_type = st.selectbox("Movement Type", ["RESTOCK", "ADJUSTMENT", "TRANSFER", "RETURN"])
+                m_qty = st.number_input("Quantity Units", min_value=1, value=25, step=5)
+                m_src = st.text_input("Source Warehouse", value="Supplier / Vendor")
+                m_tgt = st.text_input("Target Warehouse", value="Main Distribution Center")
+                m_notes = st.text_area("Audit Notes", placeholder="e.g. Purchase Order #PO-9481 replenishment")
+                m_submit = st.form_submit_button("Record Movement & Update Stock")
 
-                    if m_submit:
+                if m_submit:
+                    if current_role == "VENDOR" and not inv_ops_allowed:
+                        st.error("Non-operational vendors cannot record stock movements.")
+                    else:
                         payload = {
                             "product_id": int(m_pid),
                             "movement_type": m_type,
@@ -1394,39 +2460,37 @@ elif selected_page == "📋 Inventory Management":
                         else:
                             st.error(f"Failed to record movement: {err}")
 
-        with tab_inv_audit:
-            st.subheader("Recent Stock Movements Audit Trail")
-            movements = api_get("/inventory/movements?limit=100") if is_live_api else None
-            if not movements and not csv_data["movements"].empty:
-                df_m = csv_data["movements"].merge(csv_data["products"], left_on="product_id", right_on="id")
-                movements = [
-                    {
-                        "movement_id": r["movement_id"],
-                        "product_name": r["name"],
-                        "movement_type": r["movement_type"],
-                        "quantity": int(r["quantity"]),
-                        "source_warehouse": r.get("source_warehouse"),
-                        "target_warehouse": r.get("target_warehouse"),
-                        "created_at": str(r.get("created_at"))[:19],
-                    }
-                    for _, r in df_m.sort_values("created_at", ascending=False).iterrows()
-                ]
+    with tab_inv_audit:
+        st.subheader("Recent Stock Movements Audit Trail")
+        movements = get_stock_movements_records(limit=100)
+        if movements:
+            st.dataframe(pd.DataFrame(movements), use_container_width=True)
+        else:
+            st.info("No stock movement records found for your inventory scope.")
 
-            if movements:
-                st.dataframe(pd.DataFrame(movements), use_container_width=True)
-            else:
-                st.info("No stock movement records found.")
-
-        with tab_inv_replenish:
-            st.subheader("Replenishment & Safety Stock Projections")
-            st.caption("Calculates Reorder Points (ROP) and Safety Stock ($Z \\times \\sigma \\times \\sqrt{L}$) to prevent stockouts.")
-            replenish_data = api_get("/analytics/inventory/replenishment") if is_live_api else None
-            if replenish_data:
-                df_rep = pd.DataFrame(replenish_data)
-                cols_to_show = [c for c in ["product_name", "current_stock", "avg_daily_demand", "safety_stock", "reorder_point", "recommended_order_quantity", "urgency"] if c in df_rep.columns]
-                st.dataframe(df_rep[cols_to_show], use_container_width=True)
-            else:
-                st.info("Replenishment recommendations available in Live API mode with active sales history.")
+    with tab_inv_replenish:
+        st.subheader("Replenishment & Safety Stock Projections")
+        st.caption("Calculates Reorder Points (ROP) and Safety Stock ($Z \\times \\sigma \\times \\sqrt{L}$) to prevent stockouts.")
+        replenish_data = api_get("/analytics/inventory/replenishment") if (is_live_api and _api_reachable_this_run) else None
+        if replenish_data is None and is_live_api:
+            try:
+                from app.database import SessionLocal
+                from app.services import inventory_service
+                db_rep = SessionLocal()
+                try:
+                    replenish_data = inventory_service.get_replenishment_recommendations(db_rep)
+                finally:
+                    db_rep.close()
+            except Exception:
+                pass
+        if replenish_data and current_role == "VENDOR" and my_v_prof_inv:
+            replenish_data = [r for r in replenish_data if r.get("vendor_id") == int(my_v_prof_inv["id"])]
+        if replenish_data:
+            df_rep = pd.DataFrame(replenish_data)
+            cols_to_show = [c for c in ["product_name", "current_stock", "avg_daily_demand", "safety_stock", "reorder_point", "recommended_order_quantity", "urgency"] if c in df_rep.columns]
+            st.dataframe(df_rep[cols_to_show], use_container_width=True)
+        else:
+            st.info("No replenishment recommendations available for this inventory scope.")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1434,25 +2498,13 @@ elif selected_page == "📋 Inventory Management":
 # ═════════════════════════════════════════════════════════════════════════════
 elif selected_page == "💳 Transactions":
     st.title("💳 Transaction Ledger & Order History")
-    st.caption("Complete transactional audit ledger of all product purchases across registered vendors.")
+    st.caption(
+        "Tenant-scoped transaction ledger for your store."
+        if current_role == "VENDOR"
+        else ("Your personal purchase history and transaction receipts." if current_role == "CUSTOMER" else "Complete transactional audit ledger of all product purchases across registered vendors.")
+    )
 
-    tx_list = api_get("/analytics/transactions?limit=300") if is_live_api else None
-    if not tx_list and not csv_data["transactions"].empty:
-        df_t = csv_data["transactions"].merge(csv_data["products"], left_on="product_id", right_on="id", suffixes=("", "_prod"))
-        df_t = df_t.merge(csv_data["vendors"], left_on="vendor_id", right_on="id", suffixes=("", "_vend"))
-        tx_list = [
-            {
-                "transaction_id": int(r["transaction_id"]),
-                "transaction_date": str(r["transaction_date"])[:19],
-                "product_name": r["name"],
-                "category": r.get("category", "General"),
-                "vendor_name": r["name_vend"],
-                "quantity": int(r["quantity"]),
-                "unit_price": float(r["unit_price"]),
-                "amount": float(r["amount"]),
-            }
-            for _, r in df_t.sort_values("transaction_date", ascending=False).iterrows()
-        ]
+    tx_list = get_transactions_records(limit=300)
 
     if tx_list:
         df_tx = pd.DataFrame(tx_list)
@@ -1473,47 +2525,48 @@ elif selected_page == "💳 Transactions":
 
         st.dataframe(df_filtered, use_container_width=True)
 
-        st.markdown("---")
-        st.subheader("🛡️ Safe Refund Terminal (Idempotent & Stock-Aware)")
-        st.caption("Issue full or partial refunds with cryptographic idempotency keys, automatic payment status updates, and optional inventory restocking.")
-        if not is_live_api:
-            st.warning("⚠️ Safe Refund Terminal operates via Live API only.")
-        else:
-            with st.form("form_safe_refund", clear_on_submit=True):
-                r_c1, r_c2, r_c3 = st.columns(3)
-                ref_txn_id = r_c1.number_input("Transaction ID*", min_value=1, step=1)
-                ref_amount = r_c2.number_input("Refund Amount (₹)*", min_value=0.01, step=1.0, format="%.2f")
-                ref_restock = r_c3.checkbox("Restock Inventory to Warehouse", value=False)
+        if current_role not in ("VENDOR", "CUSTOMER"):
+            st.markdown("---")
+            st.subheader("🛡️ Safe Refund Terminal (Idempotent & Stock-Aware)")
+            st.caption("Issue full or partial refunds with cryptographic idempotency keys, automatic payment status updates, and optional inventory restocking.")
+            if not is_live_api:
+                st.warning("⚠️ Safe Refund Terminal operates via Live API only.")
+            else:
+                with st.form("form_safe_refund", clear_on_submit=True):
+                    r_c1, r_c2, r_c3 = st.columns(3)
+                    ref_txn_id = r_c1.number_input("Transaction ID*", min_value=1, step=1)
+                    ref_amount = r_c2.number_input("Refund Amount (₹)*", min_value=0.01, step=1.0, format="%.2f")
+                    ref_restock = r_c3.checkbox("Restock Inventory to Warehouse", value=False)
 
-                r_c4, r_c5 = st.columns([1, 2])
-                ref_qty = r_c4.number_input("Units to Return", min_value=0, step=1, value=0)
-                ref_reason = r_c5.text_input("Refund Audit Reason*", placeholder="e.g. Customer return, damaged goods, sizing exchange")
+                    r_c4, r_c5 = st.columns([1, 2])
+                    ref_qty = r_c4.number_input("Units to Return", min_value=0, step=1, value=0)
+                    ref_reason = r_c5.text_input("Refund Audit Reason*", placeholder="e.g. Customer return, damaged goods, sizing exchange")
 
-                ref_submit = st.form_submit_button("Process Safe Refund")
-                if ref_submit:
-                    if not ref_reason:
-                        st.error("Audit reason is required for processing refunds.")
-                    elif ref_restock and ref_qty <= 0:
-                        st.error("Returned quantity must be at least 1 unit when Restock Inventory is enabled.")
-                    else:
-                        import uuid
-                        idemp_key = f"terminal_{uuid.uuid4().hex[:12]}"
-                        payload = {
-                            "transaction_id": int(ref_txn_id),
-                            "amount": float(ref_amount),
-                            "idempotency_key": idemp_key,
-                            "reason": ref_reason,
-                            "restock_inventory": bool(ref_restock),
-                            "returned_quantity": int(ref_qty),
-                        }
-                        res, err = api_post("/refunds/", payload)
-                        if res:
-                            st.success(f"Refund successfully issued! Refund ID: {res.get('refund_id')}, Status: {res.get('status')}, Key: {idemp_key}")
-                            st.rerun()
+                    ref_submit = st.form_submit_button("Process Safe Refund")
+                    if ref_submit:
+                        if not ref_reason:
+                            st.error("Audit reason is required for processing refunds.")
+                        elif ref_restock and ref_qty <= 0:
+                            st.error("Returned quantity must be at least 1 unit when Restock Inventory is enabled.")
                         else:
-                            st.error(f"Refund processing failed: {err}")
+                            import uuid
+                            idemp_key = f"terminal_{uuid.uuid4().hex[:12]}"
+                            payload = {
+                                "transaction_id": int(ref_txn_id),
+                                "amount": float(ref_amount),
+                                "idempotency_key": idemp_key,
+                                "reason": ref_reason,
+                                "restock_inventory": bool(ref_restock),
+                                "returned_quantity": int(ref_qty),
+                            }
+                            res, err = api_post("/refunds/", payload)
+                            if res:
+                                st.success(f"Refund successfully issued! Refund ID: {res.get('refund_id')}, Status: {res.get('status')}, Key: {idemp_key}")
+                                st.rerun()
+                            else:
+                                st.error(f"Refund processing failed: {err}")
     else:
-        st.info("No transaction records available.")
+        st.info("No transaction records available for this account.")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1988,7 +3041,11 @@ elif selected_page == "🎯 Recommendations":
 
         df_cust = csv_data["customers"]
         if not df_cust.empty:
+            if current_role == "CUSTOMER" and auth_user and auth_user.get("customer_id"):
+                df_cust = df_cust[df_cust["customer_id"] == int(auth_user["customer_id"])]
             cust_map = {row["customer_id"]: f"{row['name']} (ID: {row['customer_id']})" for _, row in df_cust.iterrows()}
+            if not cust_map and current_role == "CUSTOMER" and auth_user and auth_user.get("customer_id"):
+                cust_map = {int(auth_user["customer_id"]): f"My Profile (ID: {auth_user['customer_id']})"}
             h_c1, h_c2, h_c3 = st.columns([2, 2, 1])
             with h_c1:
                 chosen_cid_h = st.selectbox("Select Customer Profile", options=list(cust_map.keys()), format_func=lambda x: cust_map[x], key="sb_hybrid_cid")
@@ -2080,7 +3137,11 @@ elif selected_page == "🎯 Recommendations":
 
         df_cust = csv_data["customers"]
         if not df_cust.empty:
+            if current_role == "CUSTOMER" and auth_user and auth_user.get("customer_id"):
+                df_cust = df_cust[df_cust["customer_id"] == int(auth_user["customer_id"])]
             cust_map = {row["customer_id"]: f"{row['name']} (ID: {row['customer_id']})" for _, row in df_cust.iterrows()}
+            if not cust_map and current_role == "CUSTOMER" and auth_user and auth_user.get("customer_id"):
+                cust_map = {int(auth_user["customer_id"]): f"My Profile (ID: {auth_user['customer_id']})"}
             chosen_cid = st.selectbox("Select Customer to Generate CF Recommendations", options=list(cust_map.keys()), format_func=lambda x: cust_map[x], key="sb_cf_cid")
 
             rec_res = api_get(f"/recommendations/customer/{chosen_cid}?n=4") if is_live_api else None
@@ -2140,8 +3201,23 @@ elif selected_page == "🛍️ Customer Catalog":
     st.title("🛍️ Storefront Catalog & Customer Dashboard")
     st.caption("Demonstration view of the online retail catalog and customer dashboard as seen by marketplace shoppers.")
 
-    df_products = get_products_list()
-    df_vendors = get_vendors_list()
+    df_products = get_products_list(scope_to_vendor=False)
+    public_vendor_names = {}
+    try:
+        from app.database import SessionLocal
+        from app.models.vendor import Vendor
+        db_pv = SessionLocal()
+        try:
+            public_vendor_names = {
+                r.id: r.name
+                for r in db_pv.query(Vendor.id, Vendor.name).filter(Vendor.status.in_(OPERATIONAL_VENDOR_STATUSES)).all()
+            }
+        finally:
+            db_pv.close()
+    except Exception:
+        pass
+    if not public_vendor_names and not csv_data["vendors"].empty:
+        public_vendor_names = {int(r["id"]): str(r["name"]) for _, r in csv_data["vendors"].iterrows()}
 
     if not df_products.empty:
         # Category Filter Bar
@@ -2161,12 +3237,8 @@ elif selected_page == "🛍️ Customer Catalog":
             cols = st.columns(cols_per_row)
             for idx, (_, prod) in enumerate(row_df.iterrows()):
                 with cols[idx]:
-                    # Find vendor name
-                    v_name = "Verified Vendor"
-                    if not df_vendors.empty and "vendor_id" in prod:
-                        match_v = df_vendors[df_vendors["id"] == prod["vendor_id"]]
-                        if not match_v.empty:
-                            v_name = match_v.iloc[0]["name"]
+                    vid_key = int(prod["vendor_id"]) if pd.notna(prod.get("vendor_id")) else None
+                    v_name = public_vendor_names.get(vid_key, "Verified Vendor")
 
                     st.markdown(
                         f"""
