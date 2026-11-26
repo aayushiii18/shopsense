@@ -43,7 +43,8 @@ if "dashboard" in sys.modules and not hasattr(sys.modules["dashboard"], "__path_
 DATA_DIR = os.path.join(ROOT_DIR, "data")
 
 from dashboard.ui_theme import (
-    TEAL_PALETTE,
+    BRAND_PALETTE,
+    BRAND_CONTINUOUS_SCALE,
     style_chart,
     get_global_css,
     render_brand_logo_html,
@@ -515,7 +516,7 @@ if not auth_user:
     st.stop()
 
 
-# ── Authenticated Navigation & Dark-Teal Sidebar ──────────────────────────────
+# ── Authenticated Navigation & Midnight Navy Sidebar ──────────────────────────
 ALL_NAV_OPTIONS = [
     "📊 Dashboard",
     "🏢 Vendor Management",
@@ -564,8 +565,8 @@ with st.sidebar:
     st.markdown(
         f"""
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; padding:0 4px;">
-            <span style="font-size:0.68rem; font-weight:700; letter-spacing:0.1em; color:#7EA8A6;">OVERVIEW &amp; CONTROL</span>
-            <span style="background:rgba(45,212,191,0.18); color:#5EEAD4; border:1px solid rgba(45,212,191,0.35); border-radius:6px; padding:2px 7px; font-size:0.65rem; font-weight:800;">{role_badge_map.get(current_role, 'USER')}</span>
+            <span style="font-size:0.68rem; font-weight:700; letter-spacing:0.1em; color:#94A3B8;">OVERVIEW &amp; CONTROL</span>
+            <span style="background:rgba(139,92,246,0.20); color:#DDD6FE; border:1px solid rgba(167,139,250,0.40); border-radius:6px; padding:2px 7px; font-size:0.65rem; font-weight:800;">{role_badge_map.get(current_role, 'USER')}</span>
         </div>
         """,
         unsafe_allow_html=True,
@@ -580,7 +581,7 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown(
-        '<div style="font-size:0.68rem; font-weight:700; letter-spacing:0.1em; color:#7EA8A6; margin-bottom:6px;">SYSTEM &amp; DATA SOURCE</div>',
+        '<div style="font-size:0.68rem; font-weight:700; letter-spacing:0.1em; color:#94A3B8; margin-bottom:6px;">SYSTEM &amp; DATA SOURCE</div>',
         unsafe_allow_html=True,
     )
     data_source = st.radio(
@@ -609,9 +610,9 @@ with st.sidebar:
         mlflow_ui_url = os.getenv("MLFLOW_UI_URL") or "http://127.0.0.1:5000"
         st.markdown(
             f"""
-            <div style="font-size:0.75rem; color:#8FB8B5; margin-top:6px; line-height:1.7;">
-                <div>🔗 <a href="{html.escape(API_BASE)}/docs" target="_blank" style="color:#5EEAD4; text-decoration:none;">Swagger API Docs (8000) ↗</a></div>
-                <div>🧪 <a href="{html.escape(mlflow_ui_url)}" target="_blank" style="color:#5EEAD4; text-decoration:none;">MLflow Tracking UI (5000) ↗</a></div>
+            <div style="font-size:0.75rem; color:#94A3B8; margin-top:6px; line-height:1.7;">
+                <div>🔗 <a href="{html.escape(API_BASE)}/docs" target="_blank" style="color:#7DD3FC; text-decoration:none;">Swagger API Docs (8000) ↗</a></div>
+                <div>🧪 <a href="{html.escape(mlflow_ui_url)}" target="_blank" style="color:#7DD3FC; text-decoration:none;">MLflow Tracking UI (5000) ↗</a></div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -1493,9 +1494,10 @@ if selected_page == "📊 Dashboard":
                     values="Count",
                     hole=0.5,
                     color="Status",
-                    color_discrete_map={"HEALTHY": "#0D9488", "LOW_STOCK": "#F59E0B", "OUT_OF_STOCK": "#EF4444", "CRITICAL": "#EF4444"},
+                    title="Store Stock Health Breakdown",
+                    color_discrete_map={"HEALTHY": "#10B981", "LOW_STOCK": "#F59E0B", "OUT_OF_STOCK": "#EF4444", "CRITICAL": "#EF4444"},
                 )
-                style_chart(fig_vinv, height=280)
+                style_chart(fig_vinv, height=300)
                 st.plotly_chart(fig_vinv, use_container_width=True)
             else:
                 st.info("No products or inventory records listed under your store yet.")
@@ -1505,16 +1507,17 @@ if selected_page == "📊 Dashboard":
             if my_txs:
                 df_my_tx = pd.DataFrame(my_txs)[["transaction_id", "transaction_date", "product_name", "quantity", "amount"]].head(10)
                 st.dataframe(df_my_tx, use_container_width=True, hide_index=True)
-                by_p_v = pd.DataFrame(my_txs).groupby("product_name")["amount"].sum().reset_index().sort_values("amount", ascending=False)
+                by_p_v = pd.DataFrame(my_txs).groupby("product_name")["amount"].sum().reset_index().sort_values("amount", ascending=True)
                 fig_vtx = px.bar(
                     by_p_v,
-                    x="product_name",
-                    y="amount",
+                    x="amount",
+                    y="product_name",
+                    orientation="h",
                     labels={"product_name": "Product", "amount": "Revenue (₹)"},
-                    color_discrete_sequence=["#0D9488"],
+                    color_discrete_sequence=["#8B5CF6"],
                     title="My Store Revenue by Product",
                 )
-                style_chart(fig_vtx, height=280, show_legend=False)
+                style_chart(fig_vtx, height=300, show_legend=False)
                 st.plotly_chart(fig_vtx, use_container_width=True)
             else:
                 st.info("No store transactions recorded yet.")
@@ -1577,7 +1580,7 @@ if selected_page == "📊 Dashboard":
         inv_low_dash = sum(1 for x in inv_dash_list if x.get("status") != "HEALTHY")
         inv_units_dash = sum(int(x.get("current_stock", 0)) for x in inv_dash_list)
 
-        # Dark-Teal Hero Showcase Banner + Action Buttons
+        # Midnight Navy Hero Showcase Banner + Action Buttons
         hero_c1, hero_c2 = st.columns([3.2, 1.1])
         with hero_c1:
             st.markdown(
@@ -1696,7 +1699,7 @@ if selected_page == "📊 Dashboard":
                     hole=0.52,
                     color="Status",
                     title="Catalog Stock Health Distribution",
-                    color_discrete_map={"HEALTHY": "#0D9488", "LOW_STOCK": "#F59E0B", "OUT_OF_STOCK": "#EF4444", "CRITICAL": "#EF4444"},
+                    color_discrete_map={"HEALTHY": "#10B981", "LOW_STOCK": "#F59E0B", "OUT_OF_STOCK": "#EF4444", "CRITICAL": "#EF4444"},
                 )
                 style_chart(fig_ov_inv, height=290)
                 st.plotly_chart(fig_ov_inv, use_container_width=True)
@@ -1766,7 +1769,7 @@ if selected_page == "📊 Dashboard":
                     y="total_revenue",
                     labels={"vendor_name": "Vendor", "total_revenue": "Revenue (₹)"},
                     color="total_revenue",
-                    color_continuous_scale="Teal",
+                    color_continuous_scale=BRAND_CONTINUOUS_SCALE,
                 )
                 style_chart(fig_v, show_legend=False)
                 fig_v.update_layout(xaxis_tickangle=-22, coloraxis_showscale=False)
@@ -1788,7 +1791,7 @@ if selected_page == "📊 Dashboard":
                     names="product_name",
                     values="total_revenue",
                     hole=0.48,
-                    color_discrete_sequence=TEAL_PALETTE,
+                    color_discrete_sequence=BRAND_PALETTE,
                 )
                 style_chart(fig_p)
                 st.plotly_chart(fig_p, use_container_width=True)
@@ -1826,7 +1829,7 @@ if selected_page == "📊 Dashboard":
                         x=[item["year_month"] for item in g_items],
                         y=[item["revenue"] for item in g_items],
                         name="Revenue (₹)",
-                        marker_color="#0D9488",
+                        marker_color="#8B5CF6",
                     ),
                     secondary_y=False,
                 )
@@ -1836,8 +1839,8 @@ if selected_page == "📊 Dashboard":
                         y=[item.get("mom_growth_pct") or 0.0 for item in g_items],
                         name="MoM Growth (%)",
                         mode="lines+markers",
-                        line=dict(color="#0F3D3E", width=3),
-                        marker=dict(size=7, color="#14B8A6"),
+                        line=dict(color="#111827", width=3),
+                        marker=dict(size=7, color="#38BDF8"),
                     ),
                     secondary_y=True,
                 )
@@ -1876,7 +1879,7 @@ if selected_page == "📊 Dashboard":
                     text="market_share_pct",
                     labels={"market_share_pct": "Market Share (%)", "vendor_name": "Vendor"},
                     color="revenue",
-                    color_continuous_scale="Teal",
+                    color_continuous_scale=BRAND_CONTINUOUS_SCALE,
                 )
                 fig_bench.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
                 style_chart(fig_bench, show_legend=False)
@@ -1894,7 +1897,7 @@ if selected_page == "📊 Dashboard":
             cat_data = api_get("/analytics/revenue/by-category") if is_live_api else None
             if cat_data and cat_data.get("categories"):
                 df_cat = pd.DataFrame(cat_data["categories"])
-                fig_cat = px.bar(df_cat, x="category", y="revenue", color="revenue", color_continuous_scale="Tealgrn", labels={"revenue": "Revenue (₹)", "category": "Category"})
+                fig_cat = px.bar(df_cat, x="category", y="revenue", color="revenue", color_continuous_scale=BRAND_CONTINUOUS_SCALE, labels={"revenue": "Revenue (₹)", "category": "Category"})
                 style_chart(fig_cat, show_legend=False)
                 fig_cat.update_layout(xaxis_tickangle=-20, coloraxis_showscale=False)
                 st.plotly_chart(fig_cat, use_container_width=True)
@@ -1906,7 +1909,7 @@ if selected_page == "📊 Dashboard":
             reg_data = api_get("/analytics/revenue/by-region") if is_live_api else None
             if reg_data and reg_data.get("regions"):
                 df_reg = pd.DataFrame(reg_data["regions"])
-                fig_reg = px.pie(df_reg, names="region", values="revenue", hole=0.45, color_discrete_sequence=TEAL_PALETTE)
+                fig_reg = px.pie(df_reg, names="region", values="revenue", hole=0.45, color_discrete_sequence=BRAND_PALETTE)
                 style_chart(fig_reg)
                 st.plotly_chart(fig_reg, use_container_width=True)
             else:
@@ -2720,7 +2723,7 @@ elif selected_page == "📋 Inventory Management":
                     title="Stock Status Categorization",
                     color="Status",
                     color_discrete_map={
-                        "HEALTHY": "#0D9488",
+                        "HEALTHY": "#10B981",
                         "LOW_STOCK": "#F59E0B",
                         "OUT_OF_STOCK": "#EF4444",
                         "CRITICAL": "#EF4444",
@@ -2736,7 +2739,7 @@ elif selected_page == "📋 Inventory Management":
                     labels={"product_name": "Product", "stock_value": "Stock Value (₹)"},
                     title="Top 10 Products by Inventory Holding Value",
                     color="stock_value",
-                    color_continuous_scale="Teal",
+                    color_continuous_scale=BRAND_CONTINUOUS_SCALE,
                 )
                 style_chart(fig_val, show_legend=False)
                 fig_val.update_layout(xaxis_tickangle=-28, coloraxis_showscale=False)
@@ -3005,7 +3008,7 @@ elif selected_page == "👥 Customer Analytics":
                         names=p_col,
                         values=c_col,
                         hole=0.48,
-                        color_discrete_sequence=TEAL_PALETTE,
+                        color_discrete_sequence=BRAND_PALETTE,
                     )
                     style_chart(fig_pie, height=300)
                     st.plotly_chart(fig_pie, use_container_width=True)
@@ -3027,7 +3030,7 @@ elif selected_page == "👥 Customer Analytics":
                         y="monetary",
                         size="frequency",
                         color="persona" if "persona" in df_cust_seg.columns else "cluster",
-                        color_discrete_sequence=TEAL_PALETTE,
+                        color_discrete_sequence=BRAND_PALETTE,
                         hover_data=[c for c in ["name", "aov"] if c in df_cust_seg.columns],
                         labels={"recency": "Recency (Days Since Last Order)", "monetary": "Lifetime Monetary Spend (₹)"},
                     )
@@ -3046,7 +3049,7 @@ elif selected_page == "👥 Customer Analytics":
                         nbins=15,
                         title="Customer Lifetime Spend Distribution",
                         labels={m_col: "Lifetime Spend (₹)", "count": "Customer Count"},
-                        color_discrete_sequence=["#0D9488"],
+                        color_discrete_sequence=["#8B5CF6"],
                     )
                     style_chart(fig_hist)
                     st.plotly_chart(fig_hist, use_container_width=True)
@@ -3150,7 +3153,7 @@ elif selected_page == "👥 Customer Analytics":
                     labels=dict(x="Activity Month (2024)", y="Signup Cohort", color="Retention %"),
                     x=period_cols,
                     y=cohort_labels,
-                    color_continuous_scale="Teal",
+                    color_continuous_scale=BRAND_CONTINUOUS_SCALE,
                     aspect="auto",
                     text_auto=".1f",
                 )
@@ -3186,7 +3189,7 @@ elif selected_page == "👥 Customer Analytics":
                 if clv_res.get("clv_tiers_distribution"):
                     st.markdown("##### 🏆 Loyalty Tier Distribution")
                     tier_df = pd.DataFrame(list(clv_res["clv_tiers_distribution"].items()), columns=["Tier", "Customer Count"])
-                    fig_tier = px.bar(tier_df, x="Tier", y="Customer Count", color="Tier", color_discrete_sequence=TEAL_PALETTE)
+                    fig_tier = px.bar(tier_df, x="Tier", y="Customer Count", color="Tier", color_discrete_sequence=BRAND_PALETTE)
                     style_chart(fig_tier, show_legend=False)
                     st.plotly_chart(fig_tier, use_container_width=True)
 
@@ -3239,7 +3242,7 @@ elif selected_page == "👥 Customer Analytics":
                     y=stage_names,
                     x=event_counts,
                     textinfo="value+percent initial",
-                    marker={"color": ["#0F3D3E", "#0D9488", "#14B8A6"]},
+                    marker={"color": ["#111827", "#8B5CF6", "#38BDF8"]},
                 ))
                 style_chart(fig_funnel)
                 st.plotly_chart(fig_funnel, use_container_width=True)
@@ -3324,12 +3327,12 @@ elif selected_page == "📈 Demand Forecasting":
             if not hist_df.empty:
                 fig_f.add_trace(go.Scatter(
                     x=hist_df["date"], y=hist_df["actual_demand"],
-                    mode="lines+markers", name="Actual Daily Sales", line=dict(color="#0F3D3E", width=2.5)
+                    mode="lines+markers", name="Actual Daily Sales", line=dict(color="#111827", width=2.5)
                 ))
             if not f_df.empty:
                 fig_f.add_trace(go.Scatter(
                     x=f_df["date"], y=f_df["predicted_demand"],
-                    mode="lines+markers", name="Forecasted Demand", line=dict(color="#0D9488", dash="dash", width=2.5)
+                    mode="lines+markers", name="Forecasted Demand", line=dict(color="#8B5CF6", dash="dash", width=2.5)
                 ))
                 fig_f.add_trace(go.Scatter(
                     x=f_df["date"], y=f_df["upper_bound"],
@@ -3338,7 +3341,7 @@ elif selected_page == "📈 Demand Forecasting":
                 fig_f.add_trace(go.Scatter(
                     x=f_df["date"], y=f_df["lower_bound"],
                     mode="lines", name="Lower 95% Bound", fill="tonexty",
-                    fillcolor="rgba(13, 148, 136, 0.14)", line=dict(width=0), showlegend=False
+                    fillcolor="rgba(139, 92, 246, 0.14)", line=dict(width=0), showlegend=False
                 ))
 
             fig_f.update_layout(
@@ -3919,14 +3922,14 @@ elif selected_page == "⚡ ETL & Data Warehouse":
                     y=daily_trend["gross_sales_gmv"],
                     mode="lines+markers",
                     name="Gross Sales GMV",
-                    line=dict(color="#0F3D3E", width=2.5),
+                    line=dict(color="#111827", width=2.5),
                 ))
                 fig_trend.add_trace(go.Scatter(
                     x=daily_trend["date"],
                     y=daily_trend["net_sales"],
                     mode="lines",
                     name="Net Sales",
-                    line=dict(color="#0D9488", width=2.5, dash="dot"),
+                    line=dict(color="#8B5CF6", width=2.5, dash="dot"),
                 ))
                 fig_trend.update_layout(
                     title="Daily Gross vs Net Sales Ingestion",
