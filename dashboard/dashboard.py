@@ -54,6 +54,7 @@ from dashboard.ui_theme import (
     render_product_card_html,
     render_recommendation_card_html,
 )
+from dashboard.executive_bi import render_executive_bi_dashboard
 
 
 # ── API Config ────────────────────────────────────────────────────────────────
@@ -519,6 +520,7 @@ if not auth_user:
 # ── Authenticated Navigation & Midnight Navy Sidebar ──────────────────────────
 ALL_NAV_OPTIONS = [
     "📊 Dashboard",
+    "💎 Executive BI",
     "🏢 Vendor Management",
     "📦 Product Management",
     "📋 Inventory Management",
@@ -3957,7 +3959,20 @@ elif selected_page == "⚡ ETL & Data Warehouse":
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 11. 🩺 INTEGRATION STATUS / SYSTEM HEALTH
+# 11. 💎 EXECUTIVE BI DASHBOARD (ADMIN ONLY)
+# ═════════════════════════════════════════════════════════════════════════════
+elif selected_page == "💎 Executive BI":
+    render_executive_bi_dashboard(
+        current_role=current_role,
+        api_base=API_BASE,
+        auth_headers_fn=_auth_headers,
+        live_api=is_live_api,
+        api_online=api_is_online,
+    )
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 12. 🩺 INTEGRATION STATUS / SYSTEM HEALTH
 # ═════════════════════════════════════════════════════════════════════════════
 elif selected_page == "🩺 Integration Status / System Health":
     st.title("🩺 Integration Status / System Health")

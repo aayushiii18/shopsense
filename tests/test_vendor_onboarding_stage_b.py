@@ -512,6 +512,7 @@ def test_04_unauthenticated_and_customer_views_hide_sensitive_and_unapproved_dat
     "page_name",
     [
         "📊 Dashboard",
+        "💎 Executive BI",
         "🏢 Vendor Management",
         "📦 Product Management",
         "📋 Inventory Management",
@@ -583,13 +584,14 @@ def test_06_login_page_first_show_password_and_role_redirects(stage_b_bridge):
     assert any("Sign-in failed" in e.value for e in at.error)
     assert len(at.radio) == 0
 
-    # 3. Admin login redirects to Executive Dashboard with top search & all 11 nav items
+    # 3. Admin login redirects to Executive Dashboard with top search & all 12 nav items
     _find_text_input(at, "login_pass").set_value("StrongPass!123")
     _find_button(at, "Sign In to ShopSense").click().run(timeout=60)
     assert len(at.exception) == 0
     assert len(at.radio) >= 1
     assert at.radio[0].value == "📊 Dashboard"
-    assert len(at.radio[0].options) == 11
+    assert len(at.radio[0].options) == 12
+    assert "💎 Executive BI" in at.radio[0].options
     assert at.session_state["auth_user"]["role"] == "ADMIN"
 
     # Simulate the browser's post-rerun frame carrying the freshly issued session auth
