@@ -29,6 +29,7 @@ from app.routes import (
     etl_routes,
     auth_routes,
     admin_routes,
+    executive_routes,
 )
 from backend.config import get_settings
 
@@ -51,6 +52,10 @@ openapi_tags = [
         "name": "Admin API",
         "description": "Administrative endpoints for platform overview, system metrics, and governance.",
     },
+    {
+        "name": "Executive Analytics API",
+        "description": "Role-restricted executive KPIs, period comparisons, SQL-aggregated trends, and vendor/product drilldowns.",
+    },
 ]
 
 app = FastAPI(
@@ -61,9 +66,10 @@ app = FastAPI(
 )
 
 # ── Register routers ────────────────────────────────────────────────────────
-# Sales API routers
+# Sales API & Executive Analytics routers
 app.include_router(revenue_routes.router)
 app.include_router(analytics_routes.router)
+app.include_router(executive_routes.router)
 
 # Forecasting API routers
 app.include_router(forecast_routes.router)
