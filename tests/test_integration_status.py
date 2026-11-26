@@ -329,13 +329,21 @@ def test_08_workflows_status_and_honest_execution_history(db_session):
 
 
 def test_09_streamlit_dashboard_integration_status_and_rbac():
-    """Verify Streamlit Integration Status renders cards, manual refresh, and enforces role gating."""
+    """Verify Login gate blocks unauthenticated access and Admin Integration Status enforces RBAC."""
     from streamlit.testing.v1 import AppTest
 
-    at = AppTest.from_file("dashboard/dashboard.py").run(timeout=60)
+    # Unauthenticated landing must enforce Login Page First with zero dashboard module access
+    at_unauth = AppTest.from_file("dashboard/dashboard.py").run(timeout=60)
+    assert len(at_unauth.exception) == 0
+    assert len(at_unauth.radio) == 0
+    assert "Welcome to ShopSense" in "\n".join(m.value for m in at_unauth.markdown)
+
+    # Authenticate as ADMIN and switch to dedicated Integration Status page
+    at = AppTest.from_file("dashboard/dashboard.py")
+    at.session_state["auth_user"] = {"id": 1, "email": "admin@shopsense.com", "role": "ADMIN"}
+    at.run(timeout=60)
     assert len(at.exception) == 0
 
-    # Switch to dedicated Integration Status page
     at.radio[0].set_value("🩺 Integration Status / System Health").run(timeout=60)
     assert len(at.exception) == 0
     assert any("Refresh Health" in b.label for b in at.button)

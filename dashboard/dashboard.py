@@ -34,10 +34,25 @@ from sklearn.metrics import silhouette_score
 
 # ── Project Path Config ───────────────────────────────────────────────────────
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if ROOT_DIR not in sys.path:
-    sys.path.insert(0, ROOT_DIR)
+if ROOT_DIR in sys.path:
+    sys.path.remove(ROOT_DIR)
+sys.path.insert(0, ROOT_DIR)
+if "dashboard" in sys.modules and not hasattr(sys.modules["dashboard"], "__path__"):
+    sys.modules.pop("dashboard", None)
 
 DATA_DIR = os.path.join(ROOT_DIR, "data")
+
+from dashboard.ui_theme import (
+    TEAL_PALETTE,
+    style_chart,
+    get_global_css,
+    render_brand_logo_html,
+    render_login_showcase_html,
+    render_hero_banner_html,
+    render_quick_tile_html,
+    render_product_card_html,
+    render_recommendation_card_html,
+)
 
 
 # ── API Config ────────────────────────────────────────────────────────────────
@@ -243,87 +258,22 @@ def submit_vendor_registration(payload: dict) -> tuple[dict | None, str | None]:
 
 # ── Page Configuration ────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="StockPilot — Retail Management Platform",
-    page_icon="📦",
+    page_title="ShopSense — Enterprise Marketplace Analytics",
+    page_icon="🏬",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# ── Custom Professional Styling (Dark Navy & Teal Theme) ─────────────────────
-st.markdown(
-    """
-    <style>
-    /* Global Background & Typography */
-    .stApp {
-        background-color: #0b0f19;
-        color: #f1f5f9;
-        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-    }
+# ── Authentication Session State ──────────────────────────────────────────────
+if "auth_token" not in st.session_state:
+    st.session_state["auth_token"] = None
+if "auth_user" not in st.session_state:
+    st.session_state["auth_user"] = None
 
-    /* Sidebar Styling */
-    section[data-testid="stSidebar"] {
-        background-color: #0f172a !important;
-        border-right: 1px solid #1e293b;
-    }
+auth_user = st.session_state.get("auth_user")
 
-    /* Card styling */
-    .sp-card {
-        background-color: #1e293b;
-        border: 1px solid #334155;
-        border-radius: 10px;
-        padding: 18px;
-        margin-bottom: 16px;
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2);
-    }
-    .sp-card-title {
-        font-size: 0.85rem;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        color: #94a3b8;
-        margin-bottom: 4px;
-    }
-    .sp-card-value {
-        font-size: 1.8rem;
-        font-weight: 700;
-        color: #38bdf8;
-    }
-    .sp-card-sub {
-        font-size: 0.8rem;
-        color: #64748b;
-        margin-top: 4px;
-    }
-
-    /* Status Badges */
-    .sp-badge {
-        display: inline-block;
-        padding: 3px 10px;
-        border-radius: 12px;
-        font-size: 0.75rem;
-        font-weight: 600;
-        text-align: center;
-    }
-    .badge-healthy { background-color: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid #10b981; }
-    .badge-warning { background-color: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1px solid #f59e0b; }
-    .badge-critical { background-color: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid #ef4444; }
-
-    /* Button Primary Accent */
-    .stButton > button {
-        background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%) !important;
-        color: #ffffff !important;
-        border: none !important;
-        border-radius: 6px !important;
-        font-weight: 600 !important;
-        padding: 8px 20px !important;
-        transition: all 0.2s ease-in-out;
-    }
-    .stButton > button:hover {
-        background: linear-gradient(135deg, #0369a1 0%, #075985 100%) !important;
-        box-shadow: 0 0 12px rgba(2, 132, 199, 0.5) !important;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+# Apply enterprise theme CSS (hides sidebar cleanly on Login Page First)
+st.markdown(get_global_css(authenticated=bool(auth_user)), unsafe_allow_html=True)
 
 
 # ── Local CSV Loaders (Demo Mode / Offline Fallback) ───────────────────────────
@@ -348,210 +298,297 @@ def load_all_csvs():
 
 csv_data = load_all_csvs()
 
-# ── Sidebar Navigation ────────────────────────────────────────────────────────
-with st.sidebar:
-    st.markdown("## 📦 **StockPilot**")
-    st.markdown("##### *Smarter Stock. Better Decisions.*")
-    st.markdown("---")
 
-    # ── Authentication & User Session ─────────────────────────────────────────
-    if "auth_token" not in st.session_state:
-        st.session_state["auth_token"] = None
-    if "auth_user" not in st.session_state:
-        st.session_state["auth_user"] = None
+def _authenticate_dashboard_user(email: str, password: str) -> tuple[dict | None, str | None]:
+    """Authenticate Admin, Vendor, or Customer via POST /auth/login (DB fallback only when API offline)."""
+    resp, err = api_post("/auth/login", {"email": email, "password": password})
+    if resp and "access_token" in resp:
+        return {
+            "token": resp["access_token"],
+            "user": {
+                "id": resp["user_id"],
+                "email": resp["email"],
+                "role": resp["role"],
+                "vendor_id": resp.get("vendor_id"),
+                "customer_id": resp.get("customer_id"),
+            },
+        }, None
+    if err and not err.startswith("Connection failed:"):
+        return None, err
 
-    auth_user = st.session_state.get("auth_user")
-    if auth_user:
-        role = auth_user.get("role", "CUSTOMER")
-        role_emoji = {"ADMIN": "👑", "VENDOR": "🏢", "CUSTOMER": "👤"}.get(role, "👤")
-        st.markdown(f"**{role_emoji} Logged in as:**")
-        st.caption(f"`{auth_user.get('email')}` ({role})")
-        if role == "VENDOR" and auth_user.get("vendor_id"):
-            st.caption(f"Vendor ID: `{auth_user.get('vendor_id')}`")
-        elif role == "CUSTOMER" and auth_user.get("customer_id"):
-            st.caption(f"Customer ID: `{auth_user.get('customer_id')}`")
+    try:
+        from app.database import SessionLocal
+        from app.services.auth.auth_service import AuthService
 
-        if st.button("🚪 Log Out", use_container_width=True, key="auth_logout_btn"):
-            token = st.session_state.get("auth_token")
-            if token:
-                api_post("/auth/logout", {"refresh_token": token})
-            st.session_state["auth_token"] = None
-            st.session_state["auth_user"] = None
-            st.rerun()
-    else:
-        with st.expander("🔐 Sign In / Register", expanded=False):
-            auth_tab_login, auth_tab_reg, auth_tab_vendor_reg = st.tabs(["Sign In", "Register", "Register as Vendor"])
-            with auth_tab_login:
-                with st.form("sidebar_login_form"):
-                    login_email = st.text_input("Email", placeholder="user@shopsense.com")
-                    login_pass = st.text_input("Password", type="password")
-                    login_submitted = st.form_submit_button("Sign In", use_container_width=True)
-                    if login_submitted:
-                        if not login_email or not login_pass:
-                            st.error("Please enter email and password.")
+        fallback_db = SessionLocal()
+        try:
+            user_obj = AuthService.authenticate_user(fallback_db, email, password)
+            tokens = AuthService.issue_token_pair(fallback_db, user_obj)
+            return {
+                "token": tokens.access_token,
+                "user": {
+                    "id": user_obj.id,
+                    "email": user_obj.email,
+                    "role": user_obj.role,
+                    "vendor_id": user_obj.vendor_id,
+                    "customer_id": user_obj.customer_id,
+                },
+            }, None
+        finally:
+            fallback_db.close()
+    except Exception as fallback_err:
+        return None, _format_validation_error(fallback_err) if not err else f"{err} ({_format_validation_error(fallback_err)})"
+
+
+def _register_customer_account(email: str, password: str) -> tuple[dict | None, str | None]:
+    """Register customer account via POST /auth/register (DB fallback only when API offline)."""
+    resp, err = api_post("/auth/register", {"email": email, "password": password})
+    if resp and "id" in resp:
+        return resp, None
+    if err and not err.startswith("Connection failed:"):
+        return None, err
+
+    try:
+        from app.database import SessionLocal
+        from app.services.auth.auth_service import AuthService
+        from app.schemas.auth_schema import UserRegisterRequest
+
+        fallback_db = SessionLocal()
+        try:
+            u = AuthService.register_customer(fallback_db, UserRegisterRequest(email=email, password=password))
+            return {"id": u.id, "email": u.email, "role": u.role}, None
+        finally:
+            fallback_db.close()
+    except Exception as exc:
+        return None, _format_validation_error(exc)
+
+
+def render_login_page():
+    """Render modern enterprise Login Page First gate blocking unauthenticated dashboard access."""
+    api_live = bool(api_get("/"))
+    left_col, right_col = st.columns([1.1, 1.0], gap="large")
+
+    with left_col:
+        st.markdown(render_login_showcase_html(), unsafe_allow_html=True)
+
+    with right_col:
+        conn_pill = (
+            '<span class="ss-pill ss-pill-online">🟢 Backend API Ready</span>'
+            if api_live
+            else '<span class="ss-pill ss-pill-offline">🟡 Local DB Auth Mode</span>'
+        )
+        st.markdown(
+            f"""
+            <div class="sp-card" style="padding:20px 24px 14px 24px; margin-bottom:14px;">
+                <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+                    <div>
+                        <div class="sp-card-title" style="margin-bottom:2px;">Secure Portal Access</div>
+                        <h3 style="margin:0; font-size:1.45rem; font-weight:800; color:#0F172A;">Welcome to ShopSense</h3>
+                    </div>
+                    {conn_pill}
+                </div>
+                <p style="margin:6px 0 0 0; font-size:0.86rem; color:#64748B;">
+                    Authenticate with your Admin, Vendor, or Customer credentials to enter your workspace.
+                </p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        auth_tab_login, auth_tab_reg, auth_tab_vendor_reg = st.tabs(
+            ["Sign In", "Register", "Register as Vendor"]
+        )
+
+        with auth_tab_login:
+            with st.container(border=True):
+                login_email = st.text_input(
+                    "Email Address",
+                    placeholder="user@shopsense.com",
+                    key="login_email",
+                )
+                show_pw = st.checkbox("Show password", value=False, key="login_show_pw")
+                login_pass = st.text_input(
+                    "Password",
+                    type="default" if show_pw else "password",
+                    placeholder="Enter your password",
+                    key="login_pass",
+                )
+                login_submitted = st.button(
+                    "Sign In to ShopSense",
+                    use_container_width=True,
+                    key="btn_login_submit",
+                )
+                if login_submitted:
+                    if not (login_email or "").strip() or not login_pass:
+                        st.error("Please enter both your email address and password.")
+                    else:
+                        auth_res, auth_err = _authenticate_dashboard_user(login_email.strip(), login_pass)
+                        if auth_res:
+                            st.session_state["auth_token"] = auth_res["token"]
+                            st.session_state["auth_user"] = auth_res["user"]
+                            role_val = auth_res["user"].get("role", "CUSTOMER")
+                            st.session_state["pending_nav_redirect"] = (
+                                "🛍️ Customer Catalog" if role_val == "CUSTOMER" else "📊 Dashboard"
+                            )
+                            st.success("Signed in successfully! Redirecting to your dashboard...")
+                            st.rerun()
                         else:
-                            resp, err = api_post("/auth/login", {"email": login_email, "password": login_pass})
-                            if resp and "access_token" in resp:
-                                st.session_state["auth_token"] = resp["access_token"]
-                                st.session_state["auth_user"] = {
-                                    "id": resp["user_id"],
-                                    "email": resp["email"],
-                                    "role": resp["role"],
-                                    "vendor_id": resp.get("vendor_id"),
-                                    "customer_id": resp.get("customer_id"),
-                                }
-                                st.success("Signed in successfully!")
-                                st.rerun()
-                            elif err and not err.startswith("Connection failed:"):
-                                st.error(f"Sign-in failed: {err}")
-                            else:
-                                try:
-                                    from app.database import SessionLocal
-                                    from app.services.auth.auth_service import AuthService
-                                    fallback_db = SessionLocal()
-                                    try:
-                                        user_obj = AuthService.authenticate_user(fallback_db, login_email, login_pass)
-                                        tokens = AuthService.issue_token_pair(fallback_db, user_obj)
-                                        st.session_state["auth_token"] = tokens.access_token
-                                        st.session_state["auth_user"] = {
-                                            "id": user_obj.id,
-                                            "email": user_obj.email,
-                                            "role": user_obj.role,
-                                            "vendor_id": user_obj.vendor_id,
-                                            "customer_id": user_obj.customer_id,
-                                        }
-                                        st.success("Signed in successfully!")
-                                        st.rerun()
-                                    finally:
-                                        fallback_db.close()
-                                except Exception as fallback_err:
-                                    st.error(f"Sign-in failed: {err or str(fallback_err)}")
+                            st.error(f"Sign-in failed: {auth_err}")
 
-            with auth_tab_reg:
-                with st.form("sidebar_register_form"):
-                    reg_email = st.text_input("Email", placeholder="shopper@example.com", key="reg_email")
-                    reg_pass = st.text_input("Password (min 8 chars)", type="password", key="reg_pass")
-                    reg_submitted = st.form_submit_button("Create Customer Account", use_container_width=True)
-                    if reg_submitted:
-                        if not reg_email or len(reg_pass) < 8:
-                            st.error("Valid email and password (min 8 characters) required.")
-                        else:
-                            resp, err = api_post("/auth/register", {"email": reg_email, "password": reg_pass})
-                            if resp and "id" in resp:
-                                st.success("Account created! Please sign in.")
-                            elif err and not err.startswith("Connection failed:"):
-                                st.error(f"Registration failed: {err}")
-                            else:
-                                try:
-                                    from app.database import SessionLocal
-                                    from app.services.auth.auth_service import AuthService
-                                    from app.schemas.auth_schema import UserRegisterRequest
-                                    fallback_db = SessionLocal()
-                                    try:
-                                        AuthService.register_customer(fallback_db, UserRegisterRequest(email=reg_email, password=reg_pass))
-                                        st.success("Account created! Please sign in.")
-                                    finally:
-                                        fallback_db.close()
-                                except Exception as fallback_err:
-                                    st.error(f"Registration failed: {err or str(fallback_err)}")
-
-            with auth_tab_vendor_reg:
-                st.caption("Vendor Application — submit your business details for admin review.")
-                with st.form("sidebar_vendor_register_form"):
-                    vreg_owner = st.text_input("Owner Name*", placeholder="e.g. Asha Mehta", key="vreg_owner")
-                    vreg_biz = st.text_input("Business / Store Name*", placeholder="e.g. Mehta Artisans", key="vreg_biz")
-                    vreg_email = st.text_input("Email*", placeholder="owner@store.com", key="vreg_email")
-                    vreg_phone = st.text_input("Phone Number*", placeholder="+91-9876543210", key="vreg_phone")
-                    vreg_cat = st.selectbox(
-                        "Vendor Category*",
-                        options=VENDOR_CATEGORY_OPTIONS,
-                        key="vreg_cat",
-                    )
-                    vreg_cat_other = st.text_input(
-                        "Custom Category (if Other)",
-                        placeholder="Specify business category",
-                        key="vreg_cat_other",
-                    )
-                    vreg_tax = st.text_input("Tax / GST ID (Optional)", placeholder="e.g. 27AAACM1234F1Z5", key="vreg_tax")
-                    vreg_pw = st.text_input("Password*", type="password", key="vreg_pw")
-                    vreg_pw2 = st.text_input("Confirm Password*", type="password", key="vreg_pw2")
-                    vreg_submitted = st.form_submit_button("Submit Vendor Application", use_container_width=True)
-
-                    if vreg_submitted:
-                        chosen_cat = (vreg_cat_other or "").strip() if vreg_cat == "Other" else vreg_cat
-                        vreg_payload = {
-                            "owner_name": (vreg_owner or "").strip(),
-                            "business_name": (vreg_biz or "").strip(),
-                            "email": (vreg_email or "").strip(),
-                            "phone": (vreg_phone or "").strip(),
-                            "category": chosen_cat,
-                            "tax_id": (vreg_tax or "").strip() or None,
-                            "password": vreg_pw or "",
-                            "password_confirmation": vreg_pw2 or "",
-                        }
-                        reg_res, reg_err = submit_vendor_registration(vreg_payload)
+        with auth_tab_reg:
+            with st.container(border=True):
+                st.caption("Create a Customer account to browse the marketplace and view personalized recommendations.")
+                reg_email = st.text_input("Email Address", placeholder="shopper@example.com", key="reg_email")
+                reg_show_pw = st.checkbox("Show password", value=False, key="reg_show_pw")
+                reg_pass = st.text_input(
+                    "Password (min 8 characters)",
+                    type="default" if reg_show_pw else "password",
+                    key="reg_pass",
+                )
+                reg_submitted = st.button(
+                    "Create Customer Account",
+                    use_container_width=True,
+                    key="btn_reg_submit",
+                )
+                if reg_submitted:
+                    if not (reg_email or "").strip() or len(reg_pass or "") < 8:
+                        st.error("Valid email address and password (min 8 characters) are required.")
+                    else:
+                        reg_res, reg_err = _register_customer_account(reg_email.strip(), reg_pass)
                         if reg_res:
-                            st.success(
-                                f"Application submitted for **{reg_res.get('business_name')}** "
-                                f"(Vendor ID: `{reg_res.get('vendor_id')}`)."
-                            )
-                            st.info(
-                                f"Status: `{reg_res.get('vendor_status', 'PENDING_APPROVAL')}` — "
-                                "Your vendor application is **awaiting admin approval**. "
-                                "You may sign in to view your application status, while product and inventory controls remain locked until approved."
-                            )
+                            st.success("Customer account created! Switch to the **Sign In** tab to log in.")
                         else:
-                            st.error(f"Vendor registration failed: {reg_err}")
+                            st.error(f"Registration failed: {reg_err}")
 
-    st.markdown("---")
+        with auth_tab_vendor_reg:
+            st.caption("Vendor Application — submit your business details for administrator approval.")
+            with st.form("sidebar_vendor_register_form"):
+                vreg_owner = st.text_input("Owner Name*", placeholder="e.g. Asha Mehta", key="vreg_owner")
+                vreg_biz = st.text_input("Business / Store Name*", placeholder="e.g. Mehta Artisans", key="vreg_biz")
+                vreg_email = st.text_input("Email*", placeholder="owner@store.com", key="vreg_email")
+                vreg_phone = st.text_input("Phone Number*", placeholder="+91-9876543210", key="vreg_phone")
+                vreg_cat = st.selectbox(
+                    "Vendor Category*",
+                    options=VENDOR_CATEGORY_OPTIONS,
+                    key="vreg_cat",
+                )
+                vreg_cat_other = st.text_input(
+                    "Custom Category (if Other)",
+                    placeholder="Specify business category",
+                    key="vreg_cat_other",
+                )
+                vreg_tax = st.text_input("Tax / GST ID (Optional)", placeholder="e.g. 27AAACM1234F1Z5", key="vreg_tax")
+                vreg_pw = st.text_input("Password*", type="password", key="vreg_pw")
+                vreg_pw2 = st.text_input("Confirm Password*", type="password", key="vreg_pw2")
+                vreg_submitted = st.form_submit_button("Submit Vendor Application", use_container_width=True)
 
-    # Navigation Menu with Role-Based Access Control
-    ALL_NAV_OPTIONS = [
+                if vreg_submitted:
+                    chosen_cat = (vreg_cat_other or "").strip() if vreg_cat == "Other" else vreg_cat
+                    vreg_payload = {
+                        "owner_name": (vreg_owner or "").strip(),
+                        "business_name": (vreg_biz or "").strip(),
+                        "email": (vreg_email or "").strip(),
+                        "phone": (vreg_phone or "").strip(),
+                        "category": chosen_cat,
+                        "tax_id": (vreg_tax or "").strip() or None,
+                        "password": vreg_pw or "",
+                        "password_confirmation": vreg_pw2 or "",
+                    }
+                    reg_res, reg_err = submit_vendor_registration(vreg_payload)
+                    if reg_res:
+                        st.success(
+                            f"Application submitted for **{reg_res.get('business_name')}** "
+                            f"(Vendor ID: `{reg_res.get('vendor_id')}`)."
+                        )
+                        st.info(
+                            f"Status: `{reg_res.get('vendor_status', 'PENDING_APPROVAL')}` — "
+                            "Your vendor application is **awaiting admin approval**. "
+                            "You may sign in to view your application status, while product and inventory controls remain locked until approved."
+                        )
+                    else:
+                        st.error(f"Vendor registration failed: {reg_err}")
+
+
+# ── Strict Login Page First Gate ──────────────────────────────────────────────
+if not auth_user:
+    render_login_page()
+    st.stop()
+
+
+# ── Authenticated Navigation & Dark-Teal Sidebar ──────────────────────────────
+ALL_NAV_OPTIONS = [
+    "📊 Dashboard",
+    "🏢 Vendor Management",
+    "📦 Product Management",
+    "📋 Inventory Management",
+    "💳 Transactions",
+    "👥 Customer Analytics",
+    "📈 Demand Forecasting",
+    "🎯 Recommendations",
+    "🛍️ Customer Catalog",
+    "⚡ ETL & Data Warehouse",
+    "🩺 Integration Status / System Health",
+]
+
+current_role = str(auth_user.get("role", "CUSTOMER")).upper()
+if current_role == "VENDOR":
+    NAV_OPTIONS = [
         "📊 Dashboard",
         "🏢 Vendor Management",
         "📦 Product Management",
         "📋 Inventory Management",
         "💳 Transactions",
-        "👥 Customer Analytics",
-        "📈 Demand Forecasting",
-        "🎯 Recommendations",
         "🛍️ Customer Catalog",
-        "⚡ ETL & Data Warehouse",
-        "🩺 Integration Status / System Health",
     ]
+elif current_role == "CUSTOMER":
+    NAV_OPTIONS = [
+        "🛍️ Customer Catalog",
+        "🎯 Recommendations",
+        "💳 Transactions",
+    ]
+else:
+    NAV_OPTIONS = ALL_NAV_OPTIONS
 
-    current_role = auth_user.get("role") if auth_user else None
-    if current_role == "VENDOR":
-        NAV_OPTIONS = [
-            "📊 Dashboard",
-            "🏢 Vendor Management",
-            "📦 Product Management",
-            "📋 Inventory Management",
-            "💳 Transactions",
-            "🛍️ Customer Catalog",
-        ]
-    elif current_role == "CUSTOMER":
-        NAV_OPTIONS = [
-            "🛍️ Customer Catalog",
-            "🎯 Recommendations",
-            "💳 Transactions",
-        ]
-    else:
-        NAV_OPTIONS = ALL_NAV_OPTIONS
+# Handle programmatic page redirects cleanly before instantiating nav_radio
+pending_target = st.session_state.pop("pending_nav_redirect", None)
+if pending_target and pending_target in NAV_OPTIONS:
+    st.session_state["nav_radio"] = pending_target
+elif st.session_state.get("nav_radio") not in NAV_OPTIONS:
+    st.session_state["nav_radio"] = "🛍️ Customer Catalog" if current_role == "CUSTOMER" else NAV_OPTIONS[0]
+
+with st.sidebar:
+    st.markdown(render_brand_logo_html("MARKETPLACE ANALYTICS"), unsafe_allow_html=True)
+    st.markdown("---")
+
+    role_badge_map = {"ADMIN": "ADMIN", "VENDOR": "VENDOR", "CUSTOMER": "CUSTOMER"}
+    st.markdown(
+        f"""
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; padding:0 4px;">
+            <span style="font-size:0.68rem; font-weight:700; letter-spacing:0.1em; color:#7EA8A6;">OVERVIEW &amp; CONTROL</span>
+            <span style="background:rgba(45,212,191,0.18); color:#5EEAD4; border:1px solid rgba(45,212,191,0.35); border-radius:6px; padding:2px 7px; font-size:0.65rem; font-weight:800;">{role_badge_map.get(current_role, 'USER')}</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     selected_page = st.radio(
         "Navigation",
         NAV_OPTIONS,
-        index=0,
+        key="nav_radio",
         label_visibility="collapsed",
     )
 
     st.markdown("---")
-    st.markdown("### ⚙️ System Status")
+    st.markdown(
+        '<div style="font-size:0.68rem; font-weight:700; letter-spacing:0.1em; color:#7EA8A6; margin-bottom:6px;">SYSTEM &amp; DATA SOURCE</div>',
+        unsafe_allow_html=True,
+    )
     data_source = st.radio(
         "Backend Connection",
         ["Live API (PostgreSQL)", "Local Demo Datasets (CSV)"],
         index=0,
+        key="data_source_radio",
+        label_visibility="collapsed",
     )
 
     is_live_api = (data_source == "Live API (PostgreSQL)")
@@ -560,17 +597,45 @@ with st.sidebar:
         api_health = api_get("/")
         if api_health and api_health.get("status") == "ok":
             api_is_online = True
-            st.success("🟢 API Connected")
+            st.caption("🟢 Live API Connected")
         else:
-            st.warning("🔴 API Offline — Fallback active")
+            st.caption("🟡 API Offline — Local DB fallback")
         _api_reachable_this_run = api_is_online
-        st.caption(f"Endpoint: `{API_BASE}`")
     else:
         _api_reachable_this_run = False
-        st.info("📁 Standalone Demo Mode (Local CSVs)")
+        st.caption("📁 Standalone Demo Mode")
+
+    if current_role == "ADMIN":
+        mlflow_ui_url = os.getenv("MLFLOW_UI_URL") or "http://127.0.0.1:5000"
+        st.markdown(
+            f"""
+            <div style="font-size:0.75rem; color:#8FB8B5; margin-top:6px; line-height:1.7;">
+                <div>🔗 <a href="{html.escape(API_BASE)}/docs" target="_blank" style="color:#5EEAD4; text-decoration:none;">Swagger API Docs (8000) ↗</a></div>
+                <div>🧪 <a href="{html.escape(mlflow_ui_url)}" target="_blank" style="color:#5EEAD4; text-decoration:none;">MLflow Tracking UI (5000) ↗</a></div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
     st.markdown("---")
-    st.caption("StockPilot v2.0 • Enterprise Edition")
+    role_emoji = {"ADMIN": "👑", "VENDOR": "🏢", "CUSTOMER": "👤"}.get(current_role, "👤")
+    st.caption(f"{role_emoji} `{auth_user.get('email')}`")
+    if current_role == "VENDOR" and auth_user.get("vendor_id"):
+        st.caption(f"Vendor ID: `{auth_user.get('vendor_id')}`")
+    elif current_role == "CUSTOMER" and auth_user.get("customer_id"):
+        st.caption(f"Customer ID: `{auth_user.get('customer_id')}`")
+
+    if st.button("🚪 Log Out", use_container_width=True, key="auth_logout_btn"):
+        token = st.session_state.get("auth_token")
+        if token:
+            api_post("/auth/logout", {"refresh_token": token})
+        st.session_state["auth_token"] = None
+        st.session_state["auth_user"] = None
+        st.session_state.pop("nav_radio", None)
+        st.session_state.pop("pending_nav_redirect", None)
+        st.rerun()
+
+    st.caption("ShopSense v2.0 • Enterprise Edition")
 
 
 def _vendor_orm_to_dict(v) -> dict:
@@ -678,11 +743,11 @@ def render_vendor_status_banner(vendor_profile: dict | None):
             <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
                 <div>
                     <div class="sp-card-title" style="margin-bottom:2px;">Vendor Approval Status — {safe_name}</div>
-                    <div style="font-size:0.95rem; color:#e2e8f0;">Category: <strong>{safe_cat}</strong> &bull; Compliance: <code>{safe_comp}</code></div>
+                    <div style="font-size:0.95rem; color:#1E293B;">Category: <strong>{safe_cat}</strong> &bull; Compliance: <code>{safe_comp}</code></div>
                 </div>
                 <span class="sp-badge {badge_cls}" style="font-size:0.85rem;">{badge_lbl}</span>
             </div>
-            <div style="margin-top:10px; font-size:0.9rem; color:#cbd5e1;">{desc}</div>
+            <div style="margin-top:10px; font-size:0.9rem; color:#475569;">{desc}</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -1095,9 +1160,9 @@ def get_transactions_records(limit: int = 300):
 
 def fetch_integration_health(live_api: bool, api_online: bool) -> dict:
     """Fetch system integration health via /admin/health API or direct service fallback."""
-    if live_api and api_online:
+    headers = _auth_headers()
+    if live_api and api_online and headers:
         try:
-            headers = _auth_headers()
             resp = requests.get(f"{API_BASE}/admin/health", headers=headers, timeout=5.0)
             if resp.status_code == 200:
                 return resp.json()
@@ -1219,7 +1284,7 @@ def render_integration_status_section(live_api: bool, api_online: bool, key_pref
                             <span class="sp-card-title" style="margin-bottom:0;">{c_name}</span>
                             <span class="sp-badge {c_badge}">{c_label}</span>
                         </div>
-                        <div style="font-size:0.88rem; color:#e2e8f0; min-height:42px; margin-bottom:6px;">{c_msg}</div>
+                        <div style="font-size:0.88rem; color:#334155; min-height:42px; margin-bottom:6px;">{c_msg}</div>
                         {extra_line}
                         <div class="sp-card-sub">Latency: <strong>{lat_txt}</strong> • Checked: {c_ts}</div>
                     </div>
@@ -1242,17 +1307,123 @@ def render_integration_status_section(live_api: bool, api_online: bool, key_pref
         st.dataframe(df_health, use_container_width=True, hide_index=True)
 
 
+def render_top_header_bar():
+    """Render modern enterprise top header bar with global search, date, live status, alerts, and profile."""
+    alerts = []
+    try:
+        if current_role == "ADMIN":
+            v_df_hdr = get_vendors_list()
+            if not v_df_hdr.empty and "status" in v_df_hdr.columns:
+                pend_cnt = int((v_df_hdr["status"] == "PENDING_APPROVAL").sum())
+                if pend_cnt > 0:
+                    alerts.append(("warning", f"{pend_cnt} vendor application(s) pending admin review."))
+            inv_hdr = get_inventory_status_records()
+            low_cnt = sum(1 for item in inv_hdr if item.get("status") != "HEALTHY")
+            if low_cnt > 0:
+                alerts.append(("error", f"{low_cnt} product(s) are at or below reorder threshold."))
+        elif current_role == "VENDOR":
+            v_prof_hdr = fetch_my_vendor_profile()
+            if v_prof_hdr:
+                st_v = str(v_prof_hdr.get("status", "")).upper()
+                if st_v == "PENDING_APPROVAL":
+                    alerts.append(("warning", "Vendor onboarding is PENDING_APPROVAL."))
+                elif st_v in ("REJECTED", "SUSPENDED", "TERMINATED"):
+                    alerts.append(("error", f"Account status is {st_v}. Check Vendor Management for notes."))
+            inv_hdr = get_inventory_status_records()
+            low_cnt = sum(1 for item in inv_hdr if item.get("status") != "HEALTHY")
+            if low_cnt > 0:
+                alerts.append(("error", f"{low_cnt} store item(s) at or below reorder level."))
+        elif current_role == "CUSTOMER":
+            tx_hdr = get_transactions_records(limit=50)
+            if tx_hdr:
+                alerts.append(("info", f"{len(tx_hdr)} completed order(s) in your purchase history."))
+    except Exception:
+        pass
+
+    c_search, c_date, c_env, c_bell, c_prof = st.columns([2.15, 1.4, 0.95, 0.8, 1.45])
+    with c_search:
+        global_query = st.text_input(
+            "Search",
+            placeholder="🔍 Search products, vendors, orders...",
+            label_visibility="collapsed",
+            key="top_global_search",
+        )
+    with c_date:
+        today_str = datetime.now().strftime("%a, %d %b %Y")
+        st.markdown(f'<div class="ss-pill">📅 {html.escape(today_str)}</div>', unsafe_allow_html=True)
+    with c_env:
+        if is_live_api and api_is_online:
+            st.markdown('<div class="ss-pill ss-pill-online">🟢 Live API</div>', unsafe_allow_html=True)
+        elif is_live_api:
+            st.markdown('<div class="ss-pill ss-pill-offline">🟡 Local DB</div>', unsafe_allow_html=True)
+        else:
+            st.markdown('<div class="ss-pill">📁 Demo CSV</div>', unsafe_allow_html=True)
+    with c_bell:
+        bell_lbl = f"🔔 {len(alerts)}" if alerts else "🔔 0"
+        with st.popover(bell_lbl, use_container_width=True):
+            st.markdown("**Operational Notifications**")
+            if alerts:
+                for lvl, msg in alerts:
+                    dot = "🔴" if lvl == "error" else ("🟡" if lvl == "warning" else "🟢")
+                    st.markdown(f"- {dot} {msg}")
+            else:
+                st.markdown("🟢 All systems and workflows clear — no active alerts.")
+    with c_prof:
+        email_str = str(auth_user.get("email", "user@shopsense.com"))
+        initials = "".join(p[0].upper() for p in email_str.split("@")[0].replace(".", " ").split()[:2]) or "SS"
+        role_sub = {"ADMIN": "Platform Admin", "VENDOR": "Vendor Portal", "CUSTOMER": "Shopper Account"}.get(current_role, current_role)
+        short_name = email_str.split("@")[0][:18]
+        st.markdown(
+            f"""
+            <div class="ss-user-chip">
+                <div class="ss-avatar">{html.escape(initials)}</div>
+                <div style="overflow:hidden;">
+                    <div style="font-size:0.8rem; font-weight:700; color:#0F172A; line-height:1.15; white-space:nowrap;">{html.escape(short_name)}</div>
+                    <div style="font-size:0.68rem; color:#64748B; line-height:1.1;">{html.escape(role_sub)}</div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    if global_query and global_query.strip():
+        q_clean = global_query.strip().lower()
+        with st.container(border=True):
+            st.markdown(f"**🔍 Search Results for:** `{global_query.strip()}`")
+            matches_shown = False
+            df_p_srch = get_products_list(scope_to_vendor=(current_role == "VENDOR"))
+            if not df_p_srch.empty:
+                mask_p = df_p_srch["name"].astype(str).str.lower().str.contains(q_clean, na=False) | df_p_srch.get("category", pd.Series(dtype=str)).astype(str).str.lower().str.contains(q_clean, na=False)
+                p_hits = df_p_srch[mask_p].head(6)
+                if not p_hits.empty:
+                    matches_shown = True
+                    st.caption("Products")
+                    st.dataframe(p_hits[[c for c in ["id", "name", "category", "price", "vendor_id"] if c in p_hits.columns]], use_container_width=True, hide_index=True)
+            if current_role == "ADMIN":
+                df_v_srch = get_vendors_list()
+                if not df_v_srch.empty:
+                    mask_v = df_v_srch["name"].astype(str).str.lower().str.contains(q_clean, na=False) | df_v_srch.get("email", pd.Series(dtype=str)).astype(str).str.lower().str.contains(q_clean, na=False)
+                    v_hits = df_v_srch[mask_v].head(6)
+                    if not v_hits.empty:
+                        matches_shown = True
+                        st.caption("Vendors")
+                        st.dataframe(v_hits[[c for c in ["id", "name", "owner_name", "email", "status"] if c in v_hits.columns]], use_container_width=True, hide_index=True)
+            if not matches_shown:
+                st.info("No matching products or records found for your current role scope.")
+
+    st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
+
+
+render_top_header_bar()
+
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 # 1. 📊 EXECUTIVE DASHBOARD
 # ═════════════════════════════════════════════════════════════════════════════
 if selected_page == "📊 Dashboard":
     if current_role == "VENDOR":
-        st.title("📊 Vendor Performance & Storefront Overview")
         my_vendor_dash = fetch_my_vendor_profile()
-        render_vendor_status_banner(my_vendor_dash)
-        st.markdown("---")
-
         my_prods = get_products_list(scope_to_vendor=True)
         my_inv = get_inventory_status_records()
         my_txs = get_transactions_records(limit=300)
@@ -1260,6 +1431,28 @@ if selected_page == "📊 Dashboard":
         tot_v_rev = sum(float(t.get("amount", 0.0)) for t in my_txs) if my_txs else 0.0
         tot_v_orders = len(my_txs)
         low_v_cnt = sum(1 for item in my_inv if item.get("status") != "HEALTHY")
+        store_title = (my_vendor_dash or {}).get("name", "Vendor Store")
+        v_status = str((my_vendor_dash or {}).get("status", "PENDING_APPROVAL")).upper()
+        v_tier = str((my_vendor_dash or {}).get("commission_tier", "TIER_STANDARD"))
+        v_cat = str((my_vendor_dash or {}).get("vendor_category") or (my_vendor_dash or {}).get("business_type") or "Retail")
+
+        st.markdown(
+            render_hero_banner_html(
+                tag=f"🏢 Vendor Storefront Portal • {v_cat}",
+                title=f"{store_title} — Performance & Operations",
+                subtitle="Tenant-scoped analytics across your approved product catalog, stock replenishment levels, and store transaction settlements.",
+                pills=[
+                    f"Status: {v_status}",
+                    f"Tier: {v_tier}",
+                    f"Catalog Items: {len(my_prods)}",
+                    f"Low-Stock Alerts: {low_v_cnt}",
+                ],
+            ),
+            unsafe_allow_html=True,
+        )
+
+        render_vendor_status_banner(my_vendor_dash)
+        st.markdown("---")
 
         vk1, vk2, vk3, vk4 = st.columns(4)
         vk1.metric("💰 My Store Revenue", f"₹{tot_v_rev:,.2f}")
@@ -1268,12 +1461,42 @@ if selected_page == "📊 Dashboard":
         vk4.metric("🚨 My Low / Out of Stock", low_v_cnt)
 
         st.markdown("---")
+        vq1, vq2, vq3 = st.columns(3)
+        with vq1:
+            st.markdown(render_quick_tile_html("👤", "Store Profile & Status", f"Status: {v_status}"), unsafe_allow_html=True)
+            if st.button("Open Vendor Profile →", key="vq_btn_vend", use_container_width=True):
+                st.session_state["pending_nav_redirect"] = "🏢 Vendor Management"
+                st.rerun()
+        with vq2:
+            st.markdown(render_quick_tile_html("📦", "My Product Catalog", f"{len(my_prods)} listed item(s)"), unsafe_allow_html=True)
+            if st.button("Manage Products →", key="vq_btn_prod", use_container_width=True):
+                st.session_state["pending_nav_redirect"] = "📦 Product Management"
+                st.rerun()
+        with vq3:
+            st.markdown(render_quick_tile_html("📋", "Warehouse Inventory", f"{low_v_cnt} alert(s) active"), unsafe_allow_html=True)
+            if st.button("Manage Inventory →", key="vq_btn_inv", use_container_width=True):
+                st.session_state["pending_nav_redirect"] = "📋 Inventory Management"
+                st.rerun()
+
+        st.markdown("---")
         vc1, vc2 = st.columns(2)
         with vc1:
             st.subheader("📋 My Inventory Snapshot")
             if my_inv:
                 df_my_inv = pd.DataFrame(my_inv)[["product_name", "current_stock", "reorder_level", "status"]]
                 st.dataframe(df_my_inv, use_container_width=True, hide_index=True)
+                status_cnt_v = df_my_inv["status"].value_counts().reset_index()
+                status_cnt_v.columns = ["Status", "Count"]
+                fig_vinv = px.pie(
+                    status_cnt_v,
+                    names="Status",
+                    values="Count",
+                    hole=0.5,
+                    color="Status",
+                    color_discrete_map={"HEALTHY": "#0D9488", "LOW_STOCK": "#F59E0B", "OUT_OF_STOCK": "#EF4444", "CRITICAL": "#EF4444"},
+                )
+                style_chart(fig_vinv, height=280)
+                st.plotly_chart(fig_vinv, use_container_width=True)
             else:
                 st.info("No products or inventory records listed under your store yet.")
 
@@ -1282,43 +1505,34 @@ if selected_page == "📊 Dashboard":
             if my_txs:
                 df_my_tx = pd.DataFrame(my_txs)[["transaction_id", "transaction_date", "product_name", "quantity", "amount"]].head(10)
                 st.dataframe(df_my_tx, use_container_width=True, hide_index=True)
+                by_p_v = pd.DataFrame(my_txs).groupby("product_name")["amount"].sum().reset_index().sort_values("amount", ascending=False)
+                fig_vtx = px.bar(
+                    by_p_v,
+                    x="product_name",
+                    y="amount",
+                    labels={"product_name": "Product", "amount": "Revenue (₹)"},
+                    color_discrete_sequence=["#0D9488"],
+                    title="My Store Revenue by Product",
+                )
+                style_chart(fig_vtx, height=280, show_legend=False)
+                st.plotly_chart(fig_vtx, use_container_width=True)
             else:
                 st.info("No store transactions recorded yet.")
 
     else:
-        st.title("📊 Executive Dashboard")
-        st.caption("Consolidated marketplace sales performance, revenue analytics, and top product movements.")
-
-        # PDF & Excel Report Export Buttons (Milestone 3 Module 6)
-        rep_c1, rep_c2, _ = st.columns([1, 1, 2])
-        with rep_c1:
-            pdf_bytes = fetch_report_bytes("pdf")
-            if pdf_bytes:
-                st.download_button(
-                    label="📄 Export PDF Report",
-                    data=pdf_bytes,
-                    file_name="stockpilot_executive_report.pdf",
-                    mime="application/pdf",
-                    use_container_width=True,
-                )
-            else:
-                st.button("📄 Export PDF Report", disabled=True, use_container_width=True)
-        with rep_c2:
-            excel_bytes = fetch_report_bytes("excel")
-            if excel_bytes:
-                st.download_button(
-                    label="📊 Export Excel Report",
-                    data=excel_bytes,
-                    file_name="stockpilot_executive_report.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True,
-                )
-            else:
-                st.button("📊 Export Excel Report", disabled=True, use_container_width=True)
+        df_v_dash = get_vendors_list()
+        pending_v_cnt = (
+            int((df_v_dash["status"] == "PENDING_APPROVAL").sum())
+            if (not df_v_dash.empty and "status" in df_v_dash.columns)
+            else 0
+        )
+        operational_v_cnt = (
+            int(df_v_dash["status"].isin(OPERATIONAL_VENDOR_STATUSES).sum())
+            if (not df_v_dash.empty and "status" in df_v_dash.columns)
+            else len(df_v_dash)
+        )
 
         summary = api_get("/analytics/summary") if is_live_api else None
-
-        # Load summary metrics
         if summary is None and not csv_data["transactions"].empty:
             df_tx = csv_data["transactions"]
             total_rev = float(df_tx["amount"].sum())
@@ -1326,7 +1540,6 @@ if selected_page == "📊 Dashboard":
             v_count = len(csv_data["vendors"])
             p_count = len(csv_data["products"])
 
-            # Compute top product & vendor from CSV
             prod_agg = df_tx.groupby("product_id")["quantity"].sum().reset_index()
             top_p_row = prod_agg.loc[prod_agg["quantity"].idxmax()] if not prod_agg.empty else None
             top_p_name = "N/A"
@@ -1344,26 +1557,14 @@ if selected_page == "📊 Dashboard":
                 "top_vendor_by_revenue": None,
             }
 
-        kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-        rev_val = summary.get("total_revenue", 0.0) if summary else 0.0
-        kpi1.metric("💰 Total Revenue", f"₹{rev_val:,.2f}")
-        kpi2.metric("🧾 Total Transactions", f"{summary.get('transaction_count', 0):,}" if summary else "0")
-        kpi3.metric("🏪 Active Vendors", summary.get("vendor_count", 0) if summary else 0)
-        kpi4.metric("📦 Catalog Items", summary.get("product_count", 0) if summary else 0)
-
-        st.markdown("---")
-
-        # ── Stage 4 Audited Financial Performance & Margin Accounting ─────────────
-        st.subheader("💼 Financial Accounting & Margin Analysis (Stage 4)")
-        st.caption("Item-level audited gross profit, discount & refund deductions, and verified COGS data coverage.")
-
         profit_data = api_get("/analytics/revenue/profit-margins") if is_live_api else None
         if profit_data is None:
+            rev_fallback = summary.get("total_revenue", 0.0) if summary else 0.0
             profit_data = {
-                "gross_sales_gmv": rev_val,
+                "gross_sales_gmv": rev_fallback,
                 "discounts_total": 0.0,
                 "refunds_total": 0.0,
-                "net_sales": rev_val,
+                "net_sales": rev_fallback,
                 "cogs_coverage_pct": 0.0,
                 "covered_net_sales": 0.0,
                 "covered_cogs": 0.0,
@@ -1371,6 +1572,98 @@ if selected_page == "📊 Dashboard":
                 "gross_margin_pct_reported": 0.0,
                 "coverage_status": "No historical cost data recorded (0.0% coverage). Actual profit uncalculated to prevent data fabrication.",
             }
+
+        inv_dash_list = get_inventory_status_records()
+        inv_low_dash = sum(1 for x in inv_dash_list if x.get("status") != "HEALTHY")
+        inv_units_dash = sum(int(x.get("current_stock", 0)) for x in inv_dash_list)
+
+        # Dark-Teal Hero Showcase Banner + Action Buttons
+        hero_c1, hero_c2 = st.columns([3.2, 1.1])
+        with hero_c1:
+            st.markdown(
+                render_hero_banner_html(
+                    tag="✨ Enterprise Retail Analytics & Data Warehouse",
+                    title="ShopSense Marketplace Intelligence Platform",
+                    subtitle="Unified real-time monitoring across multi-vendor onboarding, inventory stock control, audited COGS margin accounting, ML demand forecasting, and personalized recommendations.",
+                    pills=[
+                        f"Operational Vendors: {operational_v_cnt}",
+                        f"Pending Onboarding: {pending_v_cnt}",
+                        f"COGS Coverage: {profit_data.get('cogs_coverage_pct', 0.0):.1f}%",
+                        f"Low-Stock Alerts: {inv_low_dash}",
+                    ],
+                ),
+                unsafe_allow_html=True,
+            )
+        with hero_c2:
+            st.markdown('<div class="sp-card" style="padding:16px;">', unsafe_allow_html=True)
+            st.markdown('<div class="sp-card-title">Quick Governance &amp; Export</div>', unsafe_allow_html=True)
+            if st.button(f"⏳ Review Pending ({pending_v_cnt})", key="hero_btn_pending", use_container_width=True):
+                st.session_state["pending_nav_redirect"] = "🏢 Vendor Management"
+                st.rerun()
+            if st.button("🩺 System Health", key="hero_btn_health", use_container_width=True):
+                st.session_state["pending_nav_redirect"] = "🩺 Integration Status / System Health"
+                st.rerun()
+            pdf_bytes = fetch_report_bytes("pdf")
+            if pdf_bytes:
+                st.download_button(
+                    label="📄 Export PDF Report",
+                    data=pdf_bytes,
+                    file_name="shopsense_executive_report.pdf",
+                    mime="application/pdf",
+                    use_container_width=True,
+                )
+            else:
+                st.button("📄 Export PDF Report", disabled=True, use_container_width=True)
+            excel_bytes = fetch_report_bytes("excel")
+            if excel_bytes:
+                st.download_button(
+                    label="📊 Export Excel Report",
+                    data=excel_bytes,
+                    file_name="shopsense_executive_report.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                )
+            else:
+                st.button("📊 Export Excel Report", disabled=True, use_container_width=True)
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        # Quick Module Strip (4 rounded white highlight cards)
+        qm1, qm2, qm3, qm4 = st.columns(4)
+        with qm1:
+            st.markdown(render_quick_tile_html("📋", "Inventory Intelligence", f"{inv_units_dash:,} units • {inv_low_dash} alert(s)"), unsafe_allow_html=True)
+            if st.button("Open Inventory →", key="qm_btn_inv", use_container_width=True):
+                st.session_state["pending_nav_redirect"] = "📋 Inventory Management"
+                st.rerun()
+        with qm2:
+            st.markdown(render_quick_tile_html("📈", "Demand Forecasting", "Seasonal Holdout + RF Projections"), unsafe_allow_html=True)
+            if st.button("Open Forecasting →", key="qm_btn_fc", use_container_width=True):
+                st.session_state["pending_nav_redirect"] = "📈 Demand Forecasting"
+                st.rerun()
+        with qm3:
+            st.markdown(render_quick_tile_html("👥", "Customer Analytics", "RFM Personas, Churn & CLV"), unsafe_allow_html=True)
+            if st.button("Open Customers →", key="qm_btn_cust", use_container_width=True):
+                st.session_state["pending_nav_redirect"] = "👥 Customer Analytics"
+                st.rerun()
+        with qm4:
+            st.markdown(render_quick_tile_html("🎯", "Recommendation Engine", "Hybrid CF + TF-IDF Content"), unsafe_allow_html=True)
+            if st.button("Open Recommendations →", key="qm_btn_rec", use_container_width=True):
+                st.session_state["pending_nav_redirect"] = "🎯 Recommendations"
+                st.rerun()
+
+        st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
+
+        kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+        rev_val = summary.get("total_revenue", 0.0) if summary else 0.0
+        kpi1.metric("💰 Total Revenue (GMV)", f"₹{rev_val:,.2f}")
+        kpi2.metric("🧾 Total Transactions", f"{summary.get('transaction_count', 0):,}" if summary else "0")
+        kpi3.metric("🏪 Active Vendors", operational_v_cnt, delta=f"{pending_v_cnt} pending review" if pending_v_cnt else "All reviewed", delta_color="off")
+        kpi4.metric("📦 Catalog Items", summary.get("product_count", 0) if summary else 0)
+
+        st.markdown("---")
+
+        # ── Stage 4 Audited Financial Performance & Margin Accounting ─────────────
+        st.subheader("💼 Financial Accounting & Margin Analysis (Stage 4)")
+        st.caption("Item-level audited gross profit, discount & refund deductions, and verified COGS data coverage.")
 
         f1, f2, f3, f4 = st.columns(4)
         f1.metric("💵 Net Sales", f"₹{profit_data.get('net_sales', 0.0):,.2f}", delta=f"GMV: ₹{profit_data.get('gross_sales_gmv', 0.0):,.2f}")
@@ -1380,11 +1673,49 @@ if selected_page == "📊 Dashboard":
 
         st.info(f"ℹ️ **COGS Audit Status:** {profit_data.get('coverage_status', '')}")
 
+        # ── Inventory Overview & Active Alerts Summary ────────────────────────────
+        st.markdown("---")
+        st.subheader("📋 Marketplace Inventory Overview & Alerts")
+        if inv_dash_list:
+            df_inv_ov = pd.DataFrame(inv_dash_list)
+            inv_ov_val = float(df_inv_ov["stock_value"].sum())
+            inv_ok_cnt = int((df_inv_ov["status"] == "HEALTHY").sum())
+            io1, io2, io3 = st.columns(3)
+            io1.metric("📦 Total Physical Units", f"{inv_units_dash:,}")
+            io2.metric("💎 Inventory Valuation", f"₹{inv_ov_val:,.2f}")
+            io3.metric("🚨 Healthy vs Alert Items", f"{inv_ok_cnt} Healthy / {inv_low_dash} Alert")
+
+            ov_c_left, ov_c_right = st.columns([1, 1.5])
+            with ov_c_left:
+                st_counts = df_inv_ov["status"].value_counts().reset_index()
+                st_counts.columns = ["Status", "Count"]
+                fig_ov_inv = px.pie(
+                    st_counts,
+                    names="Status",
+                    values="Count",
+                    hole=0.52,
+                    color="Status",
+                    title="Catalog Stock Health Distribution",
+                    color_discrete_map={"HEALTHY": "#0D9488", "LOW_STOCK": "#F59E0B", "OUT_OF_STOCK": "#EF4444", "CRITICAL": "#EF4444"},
+                )
+                style_chart(fig_ov_inv, height=290)
+                st.plotly_chart(fig_ov_inv, use_container_width=True)
+            with ov_c_right:
+                low_items_df = df_inv_ov[df_inv_ov["status"] != "HEALTHY"]
+                if not low_items_df.empty:
+                    st.markdown("##### 🚨 Active Reorder Threshold Alerts")
+                    cols_al = [c for c in ["product_name", "vendor_name", "current_stock", "reorder_level", "status"] if c in low_items_df.columns]
+                    st.dataframe(low_items_df[cols_al], use_container_width=True, hide_index=True)
+                else:
+                    st.success("All catalog SKUs are above reorder thresholds.")
+        else:
+            st.info("No inventory snapshot records available.")
+
         st.markdown("---")
 
-        # ── Executive Intelligence Overview (Milestone 3 Module 5 Mockup Alignment) ──
-        st.subheader("🧠 Executive Intelligence Overview (Milestone 3 Core Modules)")
-        st.caption("Consolidated analytical intelligence: Customer Behavioral Segments, Recommendation Engine, and Demand Projections.")
+        # ── Executive Intelligence Highlights ─────────────────────────────────────
+        st.subheader("🧠 Executive Intelligence Highlights")
+        st.caption("Consolidated analytical highlights across Customer Behavioral Segments, Recommendation Engine, and Demand Projections.")
 
         intel1, intel2, intel3 = st.columns(3)
 
@@ -1396,7 +1727,6 @@ if selected_page == "📊 Dashboard":
             n_clusters = seg_info.get("n_clusters", 2) if seg_info else 2
             st.metric("Optimal Personas", f"{n_clusters} Clusters", delta=f"Silhouette: {sil_val:.3f}")
             st.markdown(f"**Davies–Bouldin:** `{db_val:.3f}` *(Low scatter ratio)*")
-            st.markdown("• **Champions / VIP:** 10 customers (Avg ₹5,405)<br>• **Core Regulars:** 49 customers (Avg ₹687)", unsafe_allow_html=True)
             st.caption("👉 Explore: Sidebar > Customer Analytics")
 
         with intel2:
@@ -1406,16 +1736,14 @@ if selected_page == "📊 Dashboard":
             rec3_val = rec_eval.get("recall_at_3", 0.8594) * 100.0 if rec_eval else 85.9
             st.metric("Relevance (Hit Rate@3)", f"{hr3_val:.1f}%", delta="Target: >= 75% (MET)")
             st.markdown(f"**Recall@3:** `{rec3_val:.1f}%` *(Zero Lookahead Holdout)*")
-            st.markdown("• **Top Pairing:** *Wireless Mouse ➜ Ergonomic Keyboard*<br>• **VIP Cross-Sell:** *Laptop Pro ➜ USB-C Multiport Hub*", unsafe_allow_html=True)
             st.caption("👉 Explore: Sidebar > Recommendations")
 
         with intel3:
             st.markdown("##### 📈 Inventory Forecast")
             fc_info = api_get("/forecast/1") if is_live_api else None
             proj_val = fc_info.get("forecast", 63.0) if fc_info else (round(float(csv_data["transactions"]["quantity"].sum() / 12), 1) if not csv_data["transactions"].empty else 78.5)
-            st.metric("Month-Ahead Demand", f"{int(round(proj_val))} Units", delta="Accuracy: 81.9%")
-            st.markdown("**Validated Accuracy:** `81.9%` *(1 - WAPE, Target >= 80% MET)*")
-            st.markdown("• **Trend Trajectory:** Upward marketplace volume<br>• **Holdout MAE:** 17.5 units across 600 orders", unsafe_allow_html=True)
+            st.metric("Month-Ahead Demand", f"{int(round(proj_val))} Units", delta="Holdout Evaluated")
+            st.markdown("**Forecasting Model:** RandomForest + Seasonality")
             st.caption("👉 Explore: Sidebar > Demand Forecasting")
 
         st.markdown("---")
@@ -1438,9 +1766,10 @@ if selected_page == "📊 Dashboard":
                     y="total_revenue",
                     labels={"vendor_name": "Vendor", "total_revenue": "Revenue (₹)"},
                     color="total_revenue",
-                    color_continuous_scale="Blues",
+                    color_continuous_scale="Teal",
                 )
-                fig_v.update_layout(margin=dict(l=20, r=20, t=30, b=30), showlegend=False, xaxis_tickangle=-25)
+                style_chart(fig_v, show_legend=False)
+                fig_v.update_layout(xaxis_tickangle=-22, coloraxis_showscale=False)
                 st.plotly_chart(fig_v, use_container_width=True)
             else:
                 st.info("No vendor revenue records available.")
@@ -1458,10 +1787,10 @@ if selected_page == "📊 Dashboard":
                     df_p,
                     names="product_name",
                     values="total_revenue",
-                    hole=0.45,
-                    color_discrete_sequence=px.colors.sequential.Teal,
+                    hole=0.48,
+                    color_discrete_sequence=TEAL_PALETTE,
                 )
-                fig_p.update_layout(margin=dict(l=20, r=20, t=30, b=30))
+                style_chart(fig_p)
                 st.plotly_chart(fig_p, use_container_width=True)
             else:
                 st.info("No product revenue records available.")
@@ -1497,7 +1826,7 @@ if selected_page == "📊 Dashboard":
                         x=[item["year_month"] for item in g_items],
                         y=[item["revenue"] for item in g_items],
                         name="Revenue (₹)",
-                        marker_color="#0284c7",
+                        marker_color="#0D9488",
                     ),
                     secondary_y=False,
                 )
@@ -1507,15 +1836,13 @@ if selected_page == "📊 Dashboard":
                         y=[item.get("mom_growth_pct") or 0.0 for item in g_items],
                         name="MoM Growth (%)",
                         mode="lines+markers",
-                        line=dict(color="#10b981", width=3),
-                        marker=dict(size=7),
+                        line=dict(color="#0F3D3E", width=3),
+                        marker=dict(size=7, color="#14B8A6"),
                     ),
                     secondary_y=True,
                 )
-                fig_g.update_layout(
-                    margin=dict(l=20, r=20, t=30, b=30),
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                )
+                style_chart(fig_g)
+                fig_g.update_layout(legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
                 fig_g.update_yaxes(title_text="Revenue (₹)", secondary_y=False)
                 fig_g.update_yaxes(title_text="MoM Growth (%)", secondary_y=True)
                 st.plotly_chart(fig_g, use_container_width=True)
@@ -1552,7 +1879,8 @@ if selected_page == "📊 Dashboard":
                     color_continuous_scale="Teal",
                 )
                 fig_bench.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
-                fig_bench.update_layout(margin=dict(l=20, r=20, t=30, b=30), showlegend=False)
+                style_chart(fig_bench, show_legend=False)
+                fig_bench.update_layout(coloraxis_showscale=False)
                 st.plotly_chart(fig_bench, use_container_width=True)
             else:
                 st.info("No vendor benchmarking records available.")
@@ -1566,8 +1894,9 @@ if selected_page == "📊 Dashboard":
             cat_data = api_get("/analytics/revenue/by-category") if is_live_api else None
             if cat_data and cat_data.get("categories"):
                 df_cat = pd.DataFrame(cat_data["categories"])
-                fig_cat = px.bar(df_cat, x="category", y="revenue", color="revenue", color_continuous_scale="Purples", labels={"revenue": "Revenue (₹)", "category": "Category"})
-                fig_cat.update_layout(margin=dict(l=20, r=20, t=30, b=30), showlegend=False, xaxis_tickangle=-20)
+                fig_cat = px.bar(df_cat, x="category", y="revenue", color="revenue", color_continuous_scale="Tealgrn", labels={"revenue": "Revenue (₹)", "category": "Category"})
+                style_chart(fig_cat, show_legend=False)
+                fig_cat.update_layout(xaxis_tickangle=-20, coloraxis_showscale=False)
                 st.plotly_chart(fig_cat, use_container_width=True)
             else:
                 st.info("No category revenue records available.")
@@ -1577,8 +1906,8 @@ if selected_page == "📊 Dashboard":
             reg_data = api_get("/analytics/revenue/by-region") if is_live_api else None
             if reg_data and reg_data.get("regions"):
                 df_reg = pd.DataFrame(reg_data["regions"])
-                fig_reg = px.pie(df_reg, names="region", values="revenue", hole=0.4, color_discrete_sequence=px.colors.sequential.Viridis)
-                fig_reg.update_layout(margin=dict(l=20, r=20, t=30, b=30))
+                fig_reg = px.pie(df_reg, names="region", values="revenue", hole=0.45, color_discrete_sequence=TEAL_PALETTE)
+                style_chart(fig_reg)
                 st.plotly_chart(fig_reg, use_container_width=True)
             else:
                 st.info("No regional customer revenue records available.")
@@ -2387,17 +2716,17 @@ elif selected_page == "📋 Inventory Management":
                     status_counts,
                     names="Status",
                     values="Count",
-                    hole=0.45,
+                    hole=0.5,
                     title="Stock Status Categorization",
                     color="Status",
                     color_discrete_map={
-                        "HEALTHY": "#10b981",
-                        "LOW_STOCK": "#f59e0b",
-                        "OUT_OF_STOCK": "#ef4444",
-                        "CRITICAL": "#ef4444",
+                        "HEALTHY": "#0D9488",
+                        "LOW_STOCK": "#F59E0B",
+                        "OUT_OF_STOCK": "#EF4444",
+                        "CRITICAL": "#EF4444",
                     },
                 )
-                fig_st.update_layout(margin=dict(l=20, r=20, t=40, b=20))
+                style_chart(fig_st)
                 st.plotly_chart(fig_st, use_container_width=True)
             with inv_col2:
                 fig_val = px.bar(
@@ -2407,9 +2736,10 @@ elif selected_page == "📋 Inventory Management":
                     labels={"product_name": "Product", "stock_value": "Stock Value (₹)"},
                     title="Top 10 Products by Inventory Holding Value",
                     color="stock_value",
-                    color_continuous_scale="Blues",
+                    color_continuous_scale="Teal",
                 )
-                fig_val.update_layout(margin=dict(l=20, r=20, t=40, b=30), showlegend=False, xaxis_tickangle=-30)
+                style_chart(fig_val, show_legend=False)
+                fig_val.update_layout(xaxis_tickangle=-28, coloraxis_showscale=False)
                 st.plotly_chart(fig_val, use_container_width=True)
         else:
             st.info("No inventory analytics to display yet.")
@@ -2674,10 +3004,10 @@ elif selected_page == "👥 Customer Analytics":
                         df_prof,
                         names=p_col,
                         values=c_col,
-                        hole=0.4,
-                        color_discrete_sequence=px.colors.qualitative.Pastel,
+                        hole=0.48,
+                        color_discrete_sequence=TEAL_PALETTE,
                     )
-                    fig_pie.update_layout(margin=dict(l=20, r=20, t=20, b=20))
+                    style_chart(fig_pie, height=300)
                     st.plotly_chart(fig_pie, use_container_width=True)
 
             with c_right:
@@ -2697,10 +3027,11 @@ elif selected_page == "👥 Customer Analytics":
                         y="monetary",
                         size="frequency",
                         color="persona" if "persona" in df_cust_seg.columns else "cluster",
+                        color_discrete_sequence=TEAL_PALETTE,
                         hover_data=[c for c in ["name", "aov"] if c in df_cust_seg.columns],
                         labels={"recency": "Recency (Days Since Last Order)", "monetary": "Lifetime Monetary Spend (₹)"},
                     )
-                    fig_scat.update_layout(margin=dict(l=20, r=20, t=30, b=30))
+                    style_chart(fig_scat)
                     st.plotly_chart(fig_scat, use_container_width=True)
 
             st.markdown("---")
@@ -2715,9 +3046,9 @@ elif selected_page == "👥 Customer Analytics":
                         nbins=15,
                         title="Customer Lifetime Spend Distribution",
                         labels={m_col: "Lifetime Spend (₹)", "count": "Customer Count"},
-                        color_discrete_sequence=["#38bdf8"],
+                        color_discrete_sequence=["#0D9488"],
                     )
-                    fig_hist.update_layout(margin=dict(l=20, r=20, t=30, b=20))
+                    style_chart(fig_hist)
                     st.plotly_chart(fig_hist, use_container_width=True)
 
             st.markdown("---")
@@ -2819,11 +3150,11 @@ elif selected_page == "👥 Customer Analytics":
                     labels=dict(x="Activity Month (2024)", y="Signup Cohort", color="Retention %"),
                     x=period_cols,
                     y=cohort_labels,
-                    color_continuous_scale="Blues",
+                    color_continuous_scale="Teal",
                     aspect="auto",
                     text_auto=".1f",
                 )
-                fig_cohort.update_layout(margin=dict(l=20, r=20, t=30, b=30))
+                style_chart(fig_cohort)
                 st.plotly_chart(fig_cohort, use_container_width=True)
 
                 st.caption(f"ℹ️ {cohort_res.get('methodology_note', '')}")
@@ -2855,8 +3186,8 @@ elif selected_page == "👥 Customer Analytics":
                 if clv_res.get("clv_tiers_distribution"):
                     st.markdown("##### 🏆 Loyalty Tier Distribution")
                     tier_df = pd.DataFrame(list(clv_res["clv_tiers_distribution"].items()), columns=["Tier", "Customer Count"])
-                    fig_tier = px.bar(tier_df, x="Tier", y="Customer Count", color="Tier", color_discrete_sequence=px.colors.qualitative.Bold)
-                    fig_tier.update_layout(margin=dict(l=20, r=20, t=20, b=20), showlegend=False)
+                    fig_tier = px.bar(tier_df, x="Tier", y="Customer Count", color="Tier", color_discrete_sequence=TEAL_PALETTE)
+                    style_chart(fig_tier, show_legend=False)
                     st.plotly_chart(fig_tier, use_container_width=True)
 
                 st.markdown("##### 📋 Customer CLV Predictions & Uncertainty Bounds")
@@ -2908,9 +3239,9 @@ elif selected_page == "👥 Customer Analytics":
                     y=stage_names,
                     x=event_counts,
                     textinfo="value+percent initial",
-                    marker={"color": ["#38bdf8", "#818cf8", "#10b981"]},
+                    marker={"color": ["#0F3D3E", "#0D9488", "#14B8A6"]},
                 ))
-                fig_funnel.update_layout(margin=dict(l=20, r=20, t=30, b=20))
+                style_chart(fig_funnel)
                 st.plotly_chart(fig_funnel, use_container_width=True)
 
                 st.dataframe(pd.DataFrame(stages)[["stage_name", "event_type", "total_events", "unique_users", "conversion_from_previous_pct", "dropoff_from_previous_pct", "overall_conversion_pct"]], use_container_width=True)
@@ -2993,12 +3324,12 @@ elif selected_page == "📈 Demand Forecasting":
             if not hist_df.empty:
                 fig_f.add_trace(go.Scatter(
                     x=hist_df["date"], y=hist_df["actual_demand"],
-                    mode="lines+markers", name="Actual Daily Sales", line=dict(color="#38bdf8", width=2)
+                    mode="lines+markers", name="Actual Daily Sales", line=dict(color="#0F3D3E", width=2.5)
                 ))
             if not f_df.empty:
                 fig_f.add_trace(go.Scatter(
                     x=f_df["date"], y=f_df["predicted_demand"],
-                    mode="lines+markers", name="Forecasted Demand", line=dict(color="#10b981", dash="dash", width=2)
+                    mode="lines+markers", name="Forecasted Demand", line=dict(color="#0D9488", dash="dash", width=2.5)
                 ))
                 fig_f.add_trace(go.Scatter(
                     x=f_df["date"], y=f_df["upper_bound"],
@@ -3007,15 +3338,15 @@ elif selected_page == "📈 Demand Forecasting":
                 fig_f.add_trace(go.Scatter(
                     x=f_df["date"], y=f_df["lower_bound"],
                     mode="lines", name="Lower 95% Bound", fill="tonexty",
-                    fillcolor="rgba(16, 185, 129, 0.15)", line=dict(width=0), showlegend=False
+                    fillcolor="rgba(13, 148, 136, 0.14)", line=dict(width=0), showlegend=False
                 ))
 
             fig_f.update_layout(
                 title=f"Demand Projection: {forecast_res.get('product_name', 'Product')}",
                 xaxis_title="Date",
                 yaxis_title="Units Demanded",
-                margin=dict(l=20, r=20, t=40, b=30),
             )
+            style_chart(fig_f)
             st.plotly_chart(fig_f, use_container_width=True)
         else:
             st.info("Insufficient historical sales data to forecast this product.")
@@ -3073,15 +3404,18 @@ elif selected_page == "🎯 Recommendations":
                 rec_cols = st.columns(len(recs))
                 for idx, rec in enumerate(recs):
                     with rec_cols[idx]:
-                        st.markdown(f"### {rec['product_name']}")
-                        st.markdown(f"**Category:** `{rec.get('category', 'General')}`")
-                        st.markdown(f"**Price:** ₹{rec['price']:,.2f}")
-                        st.markdown(f"**Vendor:** {rec['vendor_name']}")
-                        st.markdown(f"**Engine:** `{rec.get('recommendation_type', 'HYBRID')}`")
-                        st.markdown(f"**Hybrid Score:** ⭐ `{rec.get('score', 0.0):.3f}`")
-                        if rec.get("cf_score") is not None and rec.get("content_score") is not None:
-                            st.caption(f"CF: {rec['cf_score']:.2f} | Content: {rec['content_score']:.2f}")
-                        st.info(rec.get("rationale", "Recommended matching your affinity."))
+                        st.markdown(
+                            render_recommendation_card_html(
+                                name=rec["product_name"],
+                                category=rec.get("category", "General"),
+                                price=rec["price"],
+                                vendor_name=rec["vendor_name"],
+                                rec_type=rec.get("recommendation_type", "HYBRID"),
+                                score=rec.get("score", 0.0),
+                                rationale=rec.get("rationale", "Recommended matching your affinity."),
+                            ),
+                            unsafe_allow_html=True,
+                        )
 
             st.markdown("---")
             st.subheader("📊 Chronological Holdout Offline Model Evaluation (Oct–Dec 2024)")
@@ -3184,12 +3518,18 @@ elif selected_page == "🎯 Recommendations":
                 rec_cols = st.columns(len(rec_res["recommendations"]))
                 for idx, rec in enumerate(rec_res["recommendations"]):
                     with rec_cols[idx]:
-                        st.markdown(f"### {rec['product_name']}")
-                        st.markdown(f"**Category:** `{rec.get('category', 'Catalog')}`")
-                        st.markdown(f"**Price:** ₹{rec['price']:,.2f}")
-                        st.markdown(f"**Vendor:** {rec['vendor_name']}")
-                        st.markdown(f"**Score:** ⭐ `{rec.get('score', 4.5)}`")
-                        st.info(rec.get("rationale", "Recommended based on collaborative similarity."))
+                        st.markdown(
+                            render_recommendation_card_html(
+                                name=rec["product_name"],
+                                category=rec.get("category", "Catalog"),
+                                price=rec["price"],
+                                vendor_name=rec["vendor_name"],
+                                rec_type=rec.get("recommendation_type", "COLLAB_FILTER"),
+                                score=rec.get("score", 4.5),
+                                rationale=rec.get("rationale", "Recommended based on collaborative similarity."),
+                            ),
+                            unsafe_allow_html=True,
+                        )
         else:
             st.info("No customer data available.")
 
@@ -3198,9 +3538,6 @@ elif selected_page == "🎯 Recommendations":
 # 9. 🛍️ CUSTOMER CATALOG SHOWCASE (PRIORITY 3 DEMONSTRATION VIEW)
 # ═════════════════════════════════════════════════════════════════════════════
 elif selected_page == "🛍️ Customer Catalog":
-    st.title("🛍️ Storefront Catalog & Customer Dashboard")
-    st.caption("Demonstration view of the online retail catalog and customer dashboard as seen by marketplace shoppers.")
-
     df_products = get_products_list(scope_to_vendor=False)
     public_vendor_names = {}
     try:
@@ -3219,38 +3556,57 @@ elif selected_page == "🛍️ Customer Catalog":
     if not public_vendor_names and not csv_data["vendors"].empty:
         public_vendor_names = {int(r["id"]): str(r["name"]) for _, r in csv_data["vendors"].iterrows()}
 
+    st.markdown(
+        render_hero_banner_html(
+            tag="🛍️ Verified Marketplace Storefront",
+            title="ShopSense Customer Catalog Showcase",
+            subtitle="Discover approved marketplace products across verified independent sellers with live pricing and category filtering.",
+            pills=[
+                f"Approved Products: {len(df_products)}",
+                f"Active Sellers: {len(public_vendor_names)}",
+                "Verified Vendors Only",
+            ],
+        ),
+        unsafe_allow_html=True,
+    )
+
     if not df_products.empty:
-        # Category Filter Bar
+        cat_col_f, srch_col_f = st.columns([1.2, 1.8])
         categories = ["All"] + sorted(list(df_products["category"].dropna().unique()))
-        selected_cat = st.selectbox("Filter by Category", categories)
+        selected_cat = cat_col_f.selectbox("Filter by Category", categories, key="sb_catalog_cat")
+        cat_search = srch_col_f.text_input("Filter Storefront by Keyword", placeholder="Search product name or category...", key="txt_catalog_search")
 
+        filtered_prods = df_products.copy()
         if selected_cat != "All":
-            filtered_prods = df_products[df_products["category"] == selected_cat]
+            filtered_prods = filtered_prods[filtered_prods["category"] == selected_cat]
+        if cat_search and cat_search.strip():
+            kw = cat_search.strip().lower()
+            filtered_prods = filtered_prods[
+                filtered_prods["name"].astype(str).str.lower().str.contains(kw, na=False)
+                | filtered_prods.get("category", pd.Series(dtype=str)).astype(str).str.lower().str.contains(kw, na=False)
+            ]
+
+        if filtered_prods.empty:
+            st.info("No marketplace items match the selected filter criteria.")
         else:
-            filtered_prods = df_products
+            cols_per_row = 3
+            prod_rows = [filtered_prods.iloc[i : i + cols_per_row] for i in range(0, len(filtered_prods), cols_per_row)]
 
-        # Render responsive product showcase cards in rows of 3
-        cols_per_row = 3
-        prod_rows = [filtered_prods.iloc[i : i + cols_per_row] for i in range(0, len(filtered_prods), cols_per_row)]
-
-        for row_df in prod_rows:
-            cols = st.columns(cols_per_row)
-            for idx, (_, prod) in enumerate(row_df.iterrows()):
-                with cols[idx]:
-                    vid_key = int(prod["vendor_id"]) if pd.notna(prod.get("vendor_id")) else None
-                    v_name = public_vendor_names.get(vid_key, "Verified Vendor")
-
-                    st.markdown(
-                        f"""
-                        <div class="sp-card">
-                            <div class="sp-card-title">{prod.get('category', 'Retail Item')}</div>
-                            <h3 style="margin: 4px 0 8px 0; color: #f8fafc;">{prod['name']}</h3>
-                            <div class="sp-card-value">₹{prod['price']:,.2f}</div>
-                            <div class="sp-card-sub">Sold by: <strong>{v_name}</strong></div>
-                        </div>
-                        """,
-                        unsafe_allow_html=True,
-                    )
+            for row_df in prod_rows:
+                cols = st.columns(cols_per_row)
+                for idx, (_, prod) in enumerate(row_df.iterrows()):
+                    with cols[idx]:
+                        vid_key = int(prod["vendor_id"]) if pd.notna(prod.get("vendor_id")) else None
+                        v_name = public_vendor_names.get(vid_key, "Verified Vendor")
+                        st.markdown(
+                            render_product_card_html(
+                                category=prod.get("category", "Retail Item"),
+                                name=prod["name"],
+                                price=float(prod["price"]),
+                                vendor_name=v_name,
+                            ),
+                            unsafe_allow_html=True,
+                        )
     else:
         st.info("No products currently listed in the store catalog.")
 
@@ -3563,23 +3919,22 @@ elif selected_page == "⚡ ETL & Data Warehouse":
                     y=daily_trend["gross_sales_gmv"],
                     mode="lines+markers",
                     name="Gross Sales GMV",
-                    line=dict(color="#3b82f6", width=2),
+                    line=dict(color="#0F3D3E", width=2.5),
                 ))
                 fig_trend.add_trace(go.Scatter(
                     x=daily_trend["date"],
                     y=daily_trend["net_sales"],
                     mode="lines",
                     name="Net Sales",
-                    line=dict(color="#10b981", width=2, dash="dot"),
+                    line=dict(color="#0D9488", width=2.5, dash="dot"),
                 ))
                 fig_trend.update_layout(
                     title="Daily Gross vs Net Sales Ingestion",
                     xaxis_title="Date",
                     yaxis_title="Amount (₹)",
-                    template="plotly_dark",
                     hovermode="x unified",
-                    height=350,
                 )
+                style_chart(fig_trend, height=350)
                 st.plotly_chart(fig_trend, use_container_width=True)
 
                 # Table

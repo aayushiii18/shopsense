@@ -480,14 +480,15 @@ def test_04_unauthenticated_and_customer_views_hide_sensitive_and_unapproved_dat
     db.add_all([p_pend, p_act, cust])
     db.commit()
 
-    # Unauthenticated visit to Vendor Management must NOT expose tax_id or pending vendor data
+    # Unauthenticated visitor lands on Login Page First and cannot access dashboard modules or vendor data
     at_unauth = AppTest.from_file("dashboard/dashboard.py").run(timeout=60)
-    at_unauth.radio[0].set_value("🏢 Vendor Management").run(timeout=60)
     assert len(at_unauth.exception) == 0
-    assert any("sign-in required" in w.value.lower() for w in at_unauth.warning)
+    assert len(at_unauth.radio) == 0
     combined_unauth = "\n".join(m.value for m in at_unauth.markdown)
+    assert "Welcome to ShopSense" in combined_unauth
     assert "SENSITIVE_TAX_ID" not in combined_unauth
     assert "Private Admin Audit" not in combined_unauth
+    assert "Hidden Pending Widget" not in combined_unauth
 
     # Authenticated CUSTOMER view: only storefront, recommendations, transactions; hides non-operational products
     cust_user, cust_tok = _make_user_and_token(
@@ -505,7 +506,7 @@ def test_04_unauthenticated_and_customer_views_hide_sensitive_and_unapproved_dat
     assert "SENSITIVE_TAX_ID" not in cust_md
 
 
-# ── 10: Admin Multi-Page Regression Check ────────────────────────────────────
+# ── 10: Admin Multi-Page Regression Check (All 11 Views) ──────────────────────
 
 @pytest.mark.parametrize(
     "page_name",
@@ -515,7 +516,11 @@ def test_04_unauthenticated_and_customer_views_hide_sensitive_and_unapproved_dat
         "📦 Product Management",
         "📋 Inventory Management",
         "💳 Transactions",
+        "👥 Customer Analytics",
+        "📈 Demand Forecasting",
+        "🎯 Recommendations",
         "🛍️ Customer Catalog",
+        "⚡ ETL & Data Warehouse",
         "🩺 Integration Status / System Health",
     ],
 )
@@ -525,9 +530,14 @@ def test_05_admin_dashboard_pages_render_without_exceptions(stage_b_bridge, page
     db.add(v)
     db.flush()
     p = Product(name="Smoke Item", price=500.0, category="Electronics", vendor_id=v.id)
-    db.add(p)
+    cust = Customer(name="Smoke Customer", email="smoke_cust@v.com")
+    db.add_all([p, cust])
     db.flush()
     db.add(Inventory(product_id=p.id, current_stock=20, reorder_level=5, warehouse="Main"))
+    db.add(Transaction(
+        product_id=p.id, vendor_id=v.id, customer_id=cust.customer_id,
+        quantity=2, unit_price=500.0, amount=1000.0, transaction_date=datetime.utcnow(),
+    ))
     db.commit()
 
     adm_user, adm_tok = _make_user_and_token(db, email="adm_smoke@shopsense.com", role=UserRole.ADMIN)
@@ -536,3 +546,85 @@ def test_05_admin_dashboard_pages_render_without_exceptions(stage_b_bridge, page
     at.run(timeout=60)
     at.radio[0].set_value(page_name).run(timeout=60)
     assert len(at.exception) == 0, f"Exceptions on {page_name}: {at.exception}"
+
+
+# ── 11: Login Page First, Show/Hide Password & Role Redirects ─────────────────
+
+def test_06_login_page_first_show_password_and_role_redirects(stage_b_bridge):
+    db = stage_b_bridge["db"]
+    v = Vendor(name="Redirect Store", email="redir_v@shopsense.com", phone="9191919191", status="ACTIVE")
+    c = Customer(name="Redirect Buyer", email="redir_c@shopsense.com")
+    db.add_all([v, c])
+    db.commit()
+    db.refresh(v)
+    db.refresh(c)
+
+    _make_user_and_token(db, email="adm_redir@shopsense.com", role=UserRole.ADMIN)
+    _make_user_and_token(db, email="vend_redir@shopsense.com", role=UserRole.VENDOR, vendor_id=v.id)
+    _make_user_and_token(db, email="cust_redir@shopsense.com", role=UserRole.CUSTOMER, customer_id=c.customer_id)
+
+    # 1. Login Page renders first with Show/Hide Password toggle
+    at = AppTest.from_file("dashboard/dashboard.py").run(timeout=60)
+    assert len(at.exception) == 0
+    assert len(at.radio) == 0
+    assert "Welcome to ShopSense" in "\n".join(m.value for m in at.markdown)
+    pw_box = _find_text_input(at, "login_pass")
+    # Streamlit TextInput proto.type: 1 == PASSWORD (masked), 0 == DEFAULT (visible)
+    assert pw_box.proto.type == 1
+
+    show_cb = next(cb for cb in at.checkbox if cb.key == "login_show_pw")
+    show_cb.set_value(True).run(timeout=60)
+    assert _find_text_input(at, "login_pass").proto.type == 0
+
+    # 2. Invalid credentials show clear error and keep user on Login Page
+    _find_text_input(at, "login_email").set_value("adm_redir@shopsense.com")
+    _find_text_input(at, "login_pass").set_value("WrongPassword123")
+    _find_button(at, "Sign In to ShopSense").click().run(timeout=60)
+    assert any("Sign-in failed" in e.value for e in at.error)
+    assert len(at.radio) == 0
+
+    # 3. Admin login redirects to Executive Dashboard with top search & all 11 nav items
+    _find_text_input(at, "login_pass").set_value("StrongPass!123")
+    _find_button(at, "Sign In to ShopSense").click().run(timeout=60)
+    assert len(at.exception) == 0
+    assert len(at.radio) >= 1
+    assert at.radio[0].value == "📊 Dashboard"
+    assert len(at.radio[0].options) == 11
+    assert at.session_state["auth_user"]["role"] == "ADMIN"
+
+    # Simulate the browser's post-rerun frame carrying the freshly issued session auth
+    at_admin = AppTest.from_file("dashboard/dashboard.py")
+    at_admin.session_state["auth_token"] = at.session_state["auth_token"]
+    at_admin.session_state["auth_user"] = at.session_state["auth_user"]
+    at_admin.run(timeout=60)
+
+    # Global search executes cleanly without exception
+    _find_text_input(at_admin, "top_global_search").set_value("Redirect").run(timeout=60)
+    assert len(at_admin.exception) == 0
+
+    # Log out clears session cleanly via /auth/logout
+    _find_button(at_admin, "Log Out").click().run(timeout=60)
+    assert len(at_admin.exception) == 0
+    assert at_admin.session_state["auth_user"] is None
+    assert at_admin.session_state["auth_token"] is None
+
+    # Unauthenticated reload renders Login Page First (no sidebar/radio)
+    at_after_logout = AppTest.from_file("dashboard/dashboard.py").run(timeout=60)
+    assert len(at_after_logout.radio) == 0
+
+    # 4. Customer login via UI form redirects directly to Customer Catalog
+    _find_text_input(at_after_logout, "login_email").set_value("cust_redir@shopsense.com")
+    _find_text_input(at_after_logout, "login_pass").set_value("StrongPass!123")
+    _find_button(at_after_logout, "Sign In to ShopSense").click().run(timeout=60)
+    assert len(at_after_logout.exception) == 0
+    assert at_after_logout.radio[0].value == "🛍️ Customer Catalog"
+    assert at_after_logout.radio[0].options == ["🛍️ Customer Catalog", "🎯 Recommendations", "💳 Transactions"]
+
+    # 5. Vendor login via UI form redirects to Vendor Dashboard
+    at_vendor_login = AppTest.from_file("dashboard/dashboard.py").run(timeout=60)
+    _find_text_input(at_vendor_login, "login_email").set_value("vend_redir@shopsense.com")
+    _find_text_input(at_vendor_login, "login_pass").set_value("StrongPass!123")
+    _find_button(at_vendor_login, "Sign In to ShopSense").click().run(timeout=60)
+    assert len(at_vendor_login.exception) == 0
+    assert at_vendor_login.radio[0].value == "📊 Dashboard"
+    assert "Redirect Store" in "\n".join(m.value for m in at_vendor_login.markdown)

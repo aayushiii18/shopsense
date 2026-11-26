@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-11-25T12:22:22.038151",
+  "timestamp": "2026-11-26T09:56:37.044451",
   "total_checks": 12,
   "passed_checks": 12,
   "failed_checks": 0,
@@ -9,32 +9,32 @@
   "checks": [
     {
       "name": "Total Revenue vs DB Transaction Sum",
-      "expected": 87725.58,
-      "actual": 87725.58,
+      "expected": 102060.55,
+      "actual": 102060.55,
       "diff": 0.0,
       "passed": true,
       "category": "Revenue Intelligence"
     },
     {
       "name": "GMV vs Total Revenue Equivalence",
-      "expected": 87725.58,
-      "actual": 87725.58,
+      "expected": 102060.55,
+      "actual": 102060.55,
       "diff": 0.0,
       "passed": true,
       "category": "Revenue Intelligence"
     },
     {
       "name": "Average Order Value (AOV) Calculation",
-      "expected": 146.21,
-      "actual": 146.21,
+      "expected": 168.42,
+      "actual": 168.42,
       "diff": 0.0,
       "passed": true,
       "category": "Revenue Intelligence"
     },
     {
       "name": "Vendor-wise Revenue Sum vs GMV",
-      "expected": 87725.58,
-      "actual": 87725.58,
+      "expected": 102060.55,
+      "actual": 102060.55,
       "diff": 0.0,
       "passed": true,
       "category": "Revenue Intelligence"
@@ -49,32 +49,32 @@
     },
     {
       "name": "Registered Customer Count Consistency",
-      "expected": 60,
-      "actual": 60,
+      "expected": 61,
+      "actual": 61,
       "diff": 0,
       "passed": true,
       "category": "Customer Intelligence"
     },
     {
       "name": "Customer Lifetime Spend Average",
-      "expected": 1462.09,
-      "actual": 1462.09,
+      "expected": 1673.12,
+      "actual": 1673.12,
       "diff": 0.0,
       "passed": true,
       "category": "Customer Intelligence"
     },
     {
       "name": "Catalog Total Physical Stock Quantity",
-      "expected": 990,
-      "actual": 990,
+      "expected": 1100,
+      "actual": 1100,
       "diff": 0,
       "passed": true,
       "category": "Inventory Intelligence"
     },
     {
       "name": "Low-Stock Reorder Threshold Violations",
-      "expected": 0,
-      "actual": 0,
+      "expected": 1,
+      "actual": 1,
       "diff": 0,
       "passed": true,
       "category": "Inventory Intelligence"
@@ -89,8 +89,8 @@
     },
     {
       "name": "Customer RFM Completeness (All Customers Evaluated)",
-      "expected": 60,
-      "actual": 60,
+      "expected": 61,
+      "actual": 61,
       "diff": 0,
       "passed": true,
       "category": "Customer Intelligence"
