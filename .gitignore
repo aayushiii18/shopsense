@@ -8,3 +8,8 @@ venv/
 .streamlit/secrets.toml
 mlruns/
 *.pkl
+data/benchmarks/*.csv
+data/benchmarks/*.parquet
+data/benchmarks/*.db
+data/benchmarks/*.json
+stockpilot_scheduler.lock
