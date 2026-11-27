@@ -31,7 +31,9 @@
   - `/analytics/executive/summary (6M window)`: `2,254.56 ms -> 284.51 ms` (**`7.92x` faster**)
   - `/analytics/executive/vendors (limit=25)`: `1,139.29 ms -> 574.69 ms` (**`1.98x` faster**)
 - **100K Analytical Parity:** `100,000` transactions (`GMV = 22,598,219.98`, `Discounts = 621,514.40`, `Refunds = 110,255.93`, `Net Sales = 21,866,449.65`, `Gross Profit = 7,509,777.66`, `AOV = 225.98`) matched vectorized ground truth across all 7 checks.
-- **Live Localhost Mixed Load (`PostgreSQL`, single-worker Uvicorn):** `955` requests over `10.13 s` across 10 concurrent users, `0` failures (`0.0%`), `94.26 RPS`, `P95 = 182.19 ms`.
+- **Live Localhost Mixed Load (`PostgreSQL`, single-worker Uvicorn):**
+  - *10-user concurrency (Phase 4):* `955` requests over `10.13 s`, `0` failures (`0.0%`), `94.26 RPS`, `P95 = 182.19 ms`.
+  - *Progressive Locust Step 11 (50 -> 100 users, `25/s` spawn):* Reached `50` users cleanly (`441` requests, `0` failures, `22.03 RPS`, `P95 = 2,900 ms`) and scaled to `100` users (`633` requests, `0` failures, `22.49 RPS`, `51` PG conns, `P95 = 7,000 ms`) before halting safely at the `> 5,000 ms` saturation threshold prior to forcing `200–500` users (see [load_testing_report.md](load_testing_report.md)).
 
 ### Automated Regression, Consistency & Data Preservation Checks
 - **Complete Pytest Regression Suite (`pytest tests/ -q`):** Executed in Phase 4 verification (`297 passed, 0 failed`), re-checked cleanly in Phase 5 final audit.

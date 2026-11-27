@@ -16,6 +16,7 @@
 | [UAT Recording Template](docs/uat_recording_template.md) | QA & Stakeholders | Stakeholder execution log, defect tracker, usability survey & formal sign-off template |
 | [100K Benchmark Report](docs/benchmark_100k_report.md) | Performance / Eng | Milestone 4 Phase 1 vectorized 100K transaction dataset & analytics benchmark |
 | [Phase 4 Performance Report](docs/phase4_performance_report.md) | Performance / Eng | Integrated live PostgreSQL + isolated 100K relational DB baseline vs post-optimization telemetry |
+| [Step 11 Load Testing Report](docs/load_testing_report.md) | Performance / Ops | Progressive authenticated Locust load test (`50 -> 100` concurrent users, bottlenecks & saturation bounds) |
 | [Milestone 4 Final Report](docs/milestone4_final_report.md) | Leadership & Reviewers | End-to-end Milestone 4 deliverables, verified test/consistency evidence & release readiness summary |
 
 ---
