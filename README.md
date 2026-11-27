@@ -1,6 +1,22 @@
 # ShopSense / StockPilot — Multi-Vendor Retail Management, Analytics & Data Warehouse Platform
 > **Smarter Stock. Better Decisions.**  
-> *Infosys Springboard Internship Project — Stages 1 through 8 Complete*
+> *Milestones 1–4 Complete (Phases 1–5 Documentation, Executive BI, Performance Validation & UAT Ready)*
+
+---
+
+## Documentation Suite (`docs/`)
+
+| Document | Audience | Purpose |
+| :--- | :--- | :--- |
+| [System Architecture](docs/system_architecture.md) | Engineers & Architects | Component overview, 16-table DB schema, RBAC/JWT, ETL, APScheduler, MLflow/models & fallbacks, full API & env reference |
+| [Deployment & Setup Guide](docs/deployment_setup_guide.md) | DevOps & Engineers | Host setup, PostgreSQL config, `.env` secrets, migrations, admin bootstrap, startup & Docker Compose topology |
+| [Operations Manual](docs/operations_manual.md) | Operators & Admins | Health triage, degraded fallback modes, ETL quarantine, MLflow retraining, backups, benchmarks & troubleshooting |
+| [User Guide](docs/user_guide.md) | Admin, Vendor & Customer | Login gate, vendor onboarding/approval, Executive BI, catalog, inventory, refunds, forecasting & recommendations |
+| [UAT Test Plan](docs/uat_test_plan.md) | QA & Stakeholders | 16 role-based UAT scenarios & >= 85% acceptance criteria (**Status: Pending Stakeholder Execution**) |
+| [UAT Recording Template](docs/uat_recording_template.md) | QA & Stakeholders | Stakeholder execution log, defect tracker, usability survey & formal sign-off template |
+| [100K Benchmark Report](docs/benchmark_100k_report.md) | Performance / Eng | Milestone 4 Phase 1 vectorized 100K transaction dataset & analytics benchmark |
+| [Phase 4 Performance Report](docs/phase4_performance_report.md) | Performance / Eng | Integrated live PostgreSQL + isolated 100K relational DB baseline vs post-optimization telemetry |
+| [Milestone 4 Final Report](docs/milestone4_final_report.md) | Leadership & Reviewers | End-to-end Milestone 4 deliverables, verified test/consistency evidence & release readiness summary |
 
 ---
 
@@ -311,44 +327,32 @@ Open `http://localhost:8501` to access all 10 dashboard views.
 
 ### Running Tests
 ```powershell
-# Run production configuration test suite (11 tests)
+# Run production configuration test suite
 pytest tests/test_config.py -v
 
-# Run dedicated Stage 7 security test suite (46 scenarios)
+# Run dedicated Stage 7 authentication & security test suite
 pytest tests/test_stage7_auth_security.py -v
 
-# Run full repository regression suite (232 tests)
+# Run Executive Analytics API, BI Dashboard & Phase 4 performance tests
+pytest tests/test_executive_api.py tests/test_executive_bi_dashboard.py tests/test_phase4_performance.py -v
+
+# Run full repository regression suite
 pytest tests/ -q
 
 # Run platform consistency validation (12 assertions)
 python validate_consistency.py
 ```
 
-### Test Suite Summary
-- **Production Configuration Suite:** **11 / 11 passed (100%)**
-- **Stage 7 Dedicated Suite:** **46 / 46 passed (100%)** (including Stage 7.1 session revocation & backend authorization hardening)
-- **Stage 6 Dedicated Suite:** **20 / 20 passed (100%)**
-- **Full Repository Suite:** **232 / 232 passed (100%)**
-- **Consistency Verification:** **12 / 12 passed (100.0% Consistency Score)**
-- **Streamlit AppTest:** **10 / 10 views passed (0 exceptions)**
+### Verification Summary (Milestone 4 Complete)
+- **Full Repository Regression Suite:** **297 / 297 passed (`pytest tests/ -q`, verified on commit `d3629ec`)**
+- **Consistency Verification:** **12 / 12 passed (`100.0%` Consistency Score, `validate_consistency.py`)**
+- **100K Scale Validation:** Verified via isolated vectorized & relational benchmarks ([docs/benchmark_100k_report.md](docs/benchmark_100k_report.md), [docs/phase4_performance_report.md](docs/phase4_performance_report.md))
 
 ---
 
 ## 10. Historical Data Integrity & Invariants
 
-PostgreSQL database verification confirms zero data loss and zero synthetic data fabrication:
-- **Users:** 1 root administrator bootstrap account; zero fabricated passwords for legacy entities.
-- **Vendors:** 5 (unchanged)
-- **Products:** 10 (unchanged; legacy products strictly retain `NULL` cost_price)
-- **Customers:** 60 (unchanged)
-- **Transactions:** 600 completed orders across 2024 (unchanged)
-- **Physical Stock On Hand:** 990 units (unchanged)
-- **Stock Movements:** 440 records (unchanged)
-- **Customer Interactions:** 1,342 records (unchanged)
-- **Refunds:** 0 records (unchanged)
-- **Settlements:** 0 records (unchanged)
-- **Gross Merchandise Value (GMV):** ₹87,725.58 (exact match across operational DB and dimensional mart)
-- **Daily Sales Mart:** 541 dimensional records aggregating 100% of historical transactions.
+Stage 7 migration & Milestone 4 verification enforce zero data loss and preserve historical records across migrations (`vendors`, `products` retaining nullable legacy `cost_price`, `customers`, `transactions`, `inventory`, `users`, and `daily_sales_mart` matching operational DB GMV).
 
 ---
 
