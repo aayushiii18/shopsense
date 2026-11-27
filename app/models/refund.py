@@ -6,7 +6,7 @@ Enforces idempotency, amount constraints, inventory restocking, and audit links.
 """
 
 from datetime import datetime
-from sqlalchemy import Integer, Float, String, Boolean, DateTime, ForeignKey, func, CheckConstraint
+from sqlalchemy import Integer, Float, String, Boolean, DateTime, ForeignKey, Index, func, CheckConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
@@ -17,6 +17,7 @@ class Refund(Base):
     __table_args__ = (
         CheckConstraint("amount > 0", name="ck_refund_amount_positive"),
         CheckConstraint("returned_quantity >= 0", name="ck_refund_returned_quantity_nonnegative"),
+        Index("ix_refunds_status_tx", "status", "transaction_id"),
     )
 
     refund_id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)

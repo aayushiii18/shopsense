@@ -8,7 +8,7 @@ import math
 import numpy as np
 import pandas as pd
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, case
 
 import sys
 import time
@@ -144,61 +144,46 @@ def get_customer_metrics(db: Session) -> Dict[str, Any]:
 
 def get_monthly_revenue_growth(db: Session) -> Dict[str, Any]:
     """
-    Computes chronological monthly revenue aggregation and Month-over-Month (MoM) growth.
+    Computes chronological monthly revenue aggregation and Month-over-Month (MoM) growth
+    directly via SQL GROUP BY aggregation without loading full transaction rows into Python.
     """
     cached = _get_cached_rev("monthly_growth", 30.0)
     if cached is not None:
         return cached
-    txns = (
+
+    yr_col = func.extract("year", Transaction.transaction_date)
+    mo_col = func.extract("month", Transaction.transaction_date)
+    rows = (
         db.query(
-            Transaction.amount,
-            Transaction.quantity,
-            Transaction.transaction_date,
+            yr_col.label("yr"),
+            mo_col.label("mo"),
+            func.coalesce(func.sum(Transaction.amount), 0.0).label("revenue"),
+            func.coalesce(func.sum(Transaction.quantity), 0).label("units"),
+            func.count(Transaction.transaction_id).label("orders"),
         )
-        .order_by(Transaction.transaction_date.asc())
+        .group_by(yr_col, mo_col)
+        .order_by(yr_col.asc(), mo_col.asc())
         .all()
     )
 
-    if not txns:
+    if not rows:
         return {
             "total_revenue": 0.0,
             "average_order_value": 0.0,
             "monthly_growth": [],
         }
 
-    df = pd.DataFrame([
-        {
-            "amount": float(t.amount),
-            "quantity": int(t.quantity),
-            "date": pd.to_datetime(t.transaction_date),
-        }
-        for t in txns
-    ])
-
-    total_rev = round(float(df["amount"].sum()), 2)
-    aov = round(total_rev / len(df), 2) if len(df) > 0 else 0.0
-
-    df["year_month"] = df["date"].dt.to_period("M").astype(str)
-    df["month"] = df["date"].dt.month
-
-    monthly = (
-        df.groupby(["year_month", "month"])
-        .agg(
-            revenue=("amount", "sum"),
-            units=("quantity", "sum"),
-            orders=("amount", "count"),
-        )
-        .reset_index()
-    )
-
-    monthly = monthly.sort_values("year_month").reset_index(drop=True)
-    monthly["revenue"] = monthly["revenue"].round(2)
+    total_rev = round(sum(float(r.revenue or 0.0) for r in rows), 2)
+    total_orders = sum(int(r.orders or 0) for r in rows)
+    aov = round(total_rev / total_orders, 2) if total_orders > 0 else 0.0
 
     growth_items: List[Dict[str, Any]] = []
     prev_rev: Optional[float] = None
 
-    for idx, row in monthly.iterrows():
-        rev = float(row["revenue"])
+    for idx, r in enumerate(rows):
+        yr_int = int(r.yr)
+        mo_int = int(r.mo)
+        rev = round(float(r.revenue or 0.0), 2)
         if idx == 0 or prev_rev is None:
             growth_pct = None
             note = "Baseline month - no previous comparison"
@@ -211,11 +196,11 @@ def get_monthly_revenue_growth(db: Session) -> Dict[str, Any]:
 
         prev_rev = rev
         growth_items.append({
-            "year_month": str(row["year_month"]),
-            "month": int(row["month"]),
+            "year_month": f"{yr_int:04d}-{mo_int:02d}",
+            "month": mo_int,
             "revenue": rev,
-            "units": int(row["units"]),
-            "orders": int(row["orders"]),
+            "units": int(r.units or 0),
+            "orders": int(r.orders or 0),
             "mom_growth_pct": growth_pct,
             "note": note,
         })
@@ -224,7 +209,7 @@ def get_monthly_revenue_growth(db: Session) -> Dict[str, Any]:
         "total_revenue": total_rev,
         "gmv": total_rev,
         "avg_order_value": aov,
-        "total_orders": len(df),
+        "total_orders": total_orders,
         "monthly_breakdown": growth_items,
         "average_order_value": aov,
         "monthly_growth": growth_items,
@@ -302,7 +287,8 @@ def get_vendor_benchmarking(db: Session) -> Dict[str, Any]:
 
 def get_profit_margins(db: Session) -> Dict[str, Any]:
     """
-    Computes audited Gross Profit and COGS Coverage % according to formal accounting semantics:
+    Computes audited Gross Profit and COGS Coverage % according to formal accounting semantics
+    using single-pass SQL CASE aggregations (avoids loading all transactions or massive IN clauses):
       Gross GMV = sum(Transaction.amount)
       Discounts = sum(Transaction.discount_amount)
       Refunds = sum(Refund.amount where status == 'COMPLETED')
@@ -316,53 +302,57 @@ def get_profit_margins(db: Session) -> Dict[str, Any]:
     if cached is not None:
         return cached
 
-    # Gross GMV & discounts
-    gmv_row = db.query(
-        func.coalesce(func.sum(Transaction.amount), 0.0).label("gmv"),
-        func.coalesce(func.sum(Transaction.discount_amount), 0.0).label("discounts"),
-    ).first()
-
-    gross_gmv = round(float(gmv_row.gmv or 0.0), 2)
-    discounts = round(float(gmv_row.discounts or 0.0), 2)
-
-    # Refunds total
-    refunds_total = (
-        db.query(func.coalesce(func.sum(Refund.amount), 0.0))
-        .filter(Refund.status == "COMPLETED")
-        .scalar()
-    ) or 0.0
-    refunds_total = round(float(refunds_total), 2)
-
-    net_sales = max(0.0, round(gross_gmv - discounts - refunds_total, 2))
-
-    # Calculate covered items (where Product.cost_price IS NOT NULL)
-    covered_txns = (
+    tx_row = (
         db.query(
-            Transaction.transaction_id,
-            Transaction.amount,
-            Transaction.discount_amount,
-            Transaction.quantity,
-            Product.cost_price,
+            func.coalesce(func.sum(Transaction.amount), 0.0).label("gmv"),
+            func.coalesce(func.sum(Transaction.discount_amount), 0.0).label("discounts"),
+            func.coalesce(
+                func.sum(case((Product.cost_price.isnot(None), Transaction.amount), else_=0.0)),
+                0.0,
+            ).label("covered_gross"),
+            func.coalesce(
+                func.sum(case((Product.cost_price.isnot(None), Transaction.discount_amount), else_=0.0)),
+                0.0,
+            ).label("covered_disc"),
+            func.coalesce(
+                func.sum(case((Product.cost_price.isnot(None), Product.cost_price * Transaction.quantity), else_=0.0)),
+                0.0,
+            ).label("covered_cogs"),
+            func.coalesce(
+                func.sum(case((Product.cost_price.isnot(None), 1), else_=0)),
+                0,
+            ).label("covered_count"),
         )
-        .join(Product, Transaction.product_id == Product.id)
-        .filter(Product.cost_price.isnot(None))
-        .all()
+        .outerjoin(Product, Transaction.product_id == Product.id)
+        .first()
     )
 
-    if covered_txns:
-        # Sum net sales and cogs of covered items
-        covered_gross = sum(float(t.amount) for t in covered_txns)
-        covered_disc = sum(float(t.discount_amount or 0.0) for t in covered_txns)
-        covered_txn_ids = [t.transaction_id for t in covered_txns]
+    gross_gmv = round(float(tx_row.gmv or 0.0), 2) if tx_row else 0.0
+    discounts = round(float(tx_row.discounts or 0.0), 2) if tx_row else 0.0
 
-        covered_ref = (
-            db.query(func.coalesce(func.sum(Refund.amount), 0.0))
-            .filter(Refund.transaction_id.in_(covered_txn_ids), Refund.status == "COMPLETED")
-            .scalar()
-        ) or 0.0
+    ref_row = (
+        db.query(
+            func.coalesce(func.sum(Refund.amount), 0.0).label("refunds_total"),
+            func.coalesce(
+                func.sum(case((Product.cost_price.isnot(None), Refund.amount), else_=0.0)),
+                0.0,
+            ).label("covered_refunds"),
+        )
+        .join(Transaction, Refund.transaction_id == Transaction.transaction_id)
+        .outerjoin(Product, Transaction.product_id == Product.id)
+        .filter(Refund.status == "COMPLETED")
+        .first()
+    )
+    refunds_total = round(float(ref_row.refunds_total or 0.0), 2) if ref_row else 0.0
+    net_sales = max(0.0, round(gross_gmv - discounts - refunds_total, 2))
 
-        covered_net = max(0.0, round(covered_gross - covered_disc - float(covered_ref), 2))
-        covered_cogs = round(sum(float(t.cost_price) * int(t.quantity) for t in covered_txns), 2)
+    covered_count = int(tx_row.covered_count or 0) if tx_row else 0
+    if covered_count > 0:
+        covered_gross = float(tx_row.covered_gross or 0.0)
+        covered_disc = float(tx_row.covered_disc or 0.0)
+        covered_ref = float(ref_row.covered_refunds or 0.0) if ref_row else 0.0
+        covered_net = max(0.0, round(covered_gross - covered_disc - covered_ref, 2))
+        covered_cogs = round(float(tx_row.covered_cogs or 0.0), 2)
         gross_profit = round(covered_net - covered_cogs, 2)
         margin_pct = round((gross_profit / covered_net * 100.0), 2) if covered_net > 0 else 0.0
         coverage_pct = round((covered_net / net_sales * 100.0), 2) if net_sales > 0 else 0.0
@@ -477,7 +467,8 @@ def get_revenue_by_region(db: Session) -> Dict[str, Any]:
 
 def get_vendor_settlements(db: Session, vendor_id: Optional[int] = None) -> Dict[str, Any]:
     """
-    Computes auditable settlement sheet for vendors (or a specific vendor):
+    Computes auditable settlement sheet for vendors (or a specific vendor) using
+    SQL GROUP BY aggregations (eliminates N+1 queries and large IN clauses):
       Gross Sales = sum(vendor's transaction amounts)
       Discounts = sum(vendor's transaction discounts)
       Refunds = sum(refunds for vendor's transactions)
@@ -494,27 +485,45 @@ def get_vendor_settlements(db: Session, vendor_id: Optional[int] = None) -> Dict
     if vendor_id is not None:
         query = query.filter(Vendor.id == vendor_id)
     vendors = query.all()
-    settlement_items = []
 
+    tx_q = db.query(
+        Transaction.vendor_id,
+        func.coalesce(func.sum(Transaction.amount), 0.0).label("gross"),
+        func.coalesce(func.sum(Transaction.discount_amount), 0.0).label("disc"),
+        func.count(Transaction.transaction_id).label("orders_count"),
+    )
+    if vendor_id is not None:
+        tx_q = tx_q.filter(Transaction.vendor_id == vendor_id)
+    tx_map = {
+        int(r.vendor_id): (float(r.gross or 0.0), float(r.disc or 0.0), int(r.orders_count or 0))
+        for r in tx_q.group_by(Transaction.vendor_id).all()
+    }
+
+    ref_q = (
+        db.query(
+            Transaction.vendor_id,
+            func.coalesce(func.sum(Refund.amount), 0.0).label("ref_sum"),
+        )
+        .join(Transaction, Refund.transaction_id == Transaction.transaction_id)
+        .filter(Refund.status == "COMPLETED")
+    )
+    if vendor_id is not None:
+        ref_q = ref_q.filter(Transaction.vendor_id == vendor_id)
+    ref_map = {
+        int(r.vendor_id): float(r.ref_sum or 0.0)
+        for r in ref_q.group_by(Transaction.vendor_id).all()
+    }
+
+    settlement_items = []
     total_net = 0.0
     total_commission = 0.0
     total_payout = 0.0
 
     for v in vendors:
-        txns = db.query(Transaction).filter(Transaction.vendor_id == v.id).all()
-        gross = sum(float(t.amount) for t in txns)
-        disc = sum(float(t.discount_amount or 0.0) for t in txns)
-        txn_ids = [t.transaction_id for t in txns]
+        gross, disc, orders_cnt = tx_map.get(v.id, (0.0, 0.0, 0))
+        ref = ref_map.get(v.id, 0.0)
 
-        ref = 0.0
-        if txn_ids:
-            ref = (
-                db.query(func.coalesce(func.sum(Refund.amount), 0.0))
-                .filter(Refund.transaction_id.in_(txn_ids), Refund.status == "COMPLETED")
-                .scalar()
-            ) or 0.0
-
-        net = max(0.0, round(gross - disc - float(ref), 2))
+        net = max(0.0, round(gross - disc - ref, 2))
         rate = float(v.commission_rate or 0.12)
         commission = round(net * rate, 2)
         payout = round(net - commission, 2)
@@ -531,11 +540,11 @@ def get_vendor_settlements(db: Session, vendor_id: Optional[int] = None) -> Dict
             "commission_rate": round(rate, 4),
             "gross_sales": round(gross, 2),
             "discounts_allocated": round(disc, 2),
-            "refunds_deducted": round(float(ref), 2),
+            "refunds_deducted": round(ref, 2),
             "net_sales": net,
             "platform_commission": commission,
             "vendor_payout": payout,
-            "orders_count": len(txns),
+            "orders_count": orders_cnt,
         })
 
     res = {

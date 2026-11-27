@@ -66,6 +66,76 @@ def _pct_change(current: float, previous: Optional[float]) -> Optional[float]:
     return round(((current - previous) / previous) * 100.0, 2)
 
 
+def _build_financials_payload(
+    tx_count: int,
+    total_units: int,
+    raw_gmv: float,
+    raw_discounts: float,
+    raw_refunds: float,
+    covered_count: int,
+    covered_gross: float,
+    covered_disc: float,
+    covered_ref: float,
+    raw_covered_cogs: float,
+) -> Dict[str, Any]:
+    """Format canonical executive financial & cost-coverage KPIs from SQL aggregates."""
+    gross_gmv = round(raw_gmv, 2)
+    discounts = round(raw_discounts, 2)
+    refunds = round(raw_refunds, 2)
+    net_sales = max(0.0, round(gross_gmv - discounts - refunds, 2))
+
+    aov = round(gross_gmv / tx_count, 2) if tx_count > 0 else 0.0
+    avg_net_aov = round(net_sales / tx_count, 2) if tx_count > 0 else 0.0
+    has_cost_data = covered_count > 0
+
+    if has_cost_data:
+        covered_net = max(0.0, round(covered_gross - covered_disc - covered_ref, 2))
+        covered_cogs = round(raw_covered_cogs, 2)
+        gross_profit = round(covered_net - covered_cogs, 2)
+        margin_pct = round((gross_profit / covered_net) * 100.0, 2) if covered_net > 0 else None
+        coverage_pct = round((covered_net / net_sales) * 100.0, 2) if net_sales > 0 else 0.0
+        cost_complete = coverage_pct >= 99.9
+        is_partial = not cost_complete and coverage_pct > 0.0
+        coverage_status = (
+            f"Full cost data coverage ({coverage_pct:.1f}% of net sales)."
+            if cost_complete
+            else f"Partial cost data coverage ({coverage_pct:.1f}% of net sales); profit calculated strictly on covered items."
+        )
+    else:
+        covered_net = 0.0
+        covered_cogs = 0.0
+        gross_profit = None
+        margin_pct = None
+        coverage_pct = 0.0
+        cost_complete = False
+        is_partial = False
+        coverage_status = (
+            "No transaction volume in selected scope."
+            if tx_count == 0
+            else "No product cost data recorded (0.0% coverage); gross profit omitted to prevent misleading calculations."
+        )
+
+    return {
+        "gross_sales_gmv": gross_gmv,
+        "discounts_total": discounts,
+        "refunds_total": refunds,
+        "net_sales": net_sales,
+        "total_transactions": tx_count,
+        "total_units_sold": total_units,
+        "avg_order_value": aov,
+        "avg_net_order_value": avg_net_aov,
+        "has_cost_data": has_cost_data,
+        "cost_coverage_complete": cost_complete,
+        "is_partial_profit": is_partial,
+        "cogs_coverage_pct": coverage_pct,
+        "covered_net_sales": covered_net,
+        "covered_cogs": covered_cogs,
+        "gross_profit_reported": gross_profit,
+        "gross_margin_pct_reported": margin_pct,
+        "coverage_status": coverage_status,
+    }
+
+
 def _compute_financial_kpis(
     db: Session,
     start_dt: Optional[datetime],
@@ -122,68 +192,18 @@ def _compute_financial_kpis(
     )
     ref_row = _apply_tx_filters(ref_q, start_dt, end_dt_excl, vendor_id).first()
 
-    tx_count = int(tx_row.tx_count or 0) if tx_row else 0
-    total_units = int(tx_row.total_units or 0) if tx_row else 0
-    gross_gmv = round(float(tx_row.gross_gmv or 0.0), 2) if tx_row else 0.0
-    discounts = round(float(tx_row.discounts or 0.0), 2) if tx_row else 0.0
-    refunds = round(float(ref_row.refunds_total or 0.0), 2) if ref_row else 0.0
-    net_sales = max(0.0, round(gross_gmv - discounts - refunds, 2))
-
-    aov = round(gross_gmv / tx_count, 2) if tx_count > 0 else 0.0
-    avg_net_aov = round(net_sales / tx_count, 2) if tx_count > 0 else 0.0
-
-    covered_count = int(tx_row.covered_count or 0) if tx_row else 0
-    has_cost_data = covered_count > 0
-
-    if has_cost_data:
-        covered_gross = float(tx_row.covered_gross or 0.0)
-        covered_disc = float(tx_row.covered_disc or 0.0)
-        covered_ref = float(ref_row.covered_refunds or 0.0) if ref_row else 0.0
-        covered_net = max(0.0, round(covered_gross - covered_disc - covered_ref, 2))
-        covered_cogs = round(float(tx_row.covered_cogs or 0.0), 2)
-        gross_profit = round(covered_net - covered_cogs, 2)
-        margin_pct = round((gross_profit / covered_net) * 100.0, 2) if covered_net > 0 else None
-        coverage_pct = round((covered_net / net_sales) * 100.0, 2) if net_sales > 0 else 0.0
-        cost_complete = coverage_pct >= 99.9
-        is_partial = not cost_complete and coverage_pct > 0.0
-        coverage_status = (
-            f"Full cost data coverage ({coverage_pct:.1f}% of net sales)."
-            if cost_complete
-            else f"Partial cost data coverage ({coverage_pct:.1f}% of net sales); profit calculated strictly on covered items."
-        )
-    else:
-        covered_net = 0.0
-        covered_cogs = 0.0
-        gross_profit = None
-        margin_pct = None
-        coverage_pct = 0.0
-        cost_complete = False
-        is_partial = False
-        coverage_status = (
-            "No transaction volume in selected scope."
-            if tx_count == 0
-            else "No product cost data recorded (0.0% coverage); gross profit omitted to prevent misleading calculations."
-        )
-
-    return {
-        "gross_sales_gmv": gross_gmv,
-        "discounts_total": discounts,
-        "refunds_total": refunds,
-        "net_sales": net_sales,
-        "total_transactions": tx_count,
-        "total_units_sold": total_units,
-        "avg_order_value": aov,
-        "avg_net_order_value": avg_net_aov,
-        "has_cost_data": has_cost_data,
-        "cost_coverage_complete": cost_complete,
-        "is_partial_profit": is_partial,
-        "cogs_coverage_pct": coverage_pct,
-        "covered_net_sales": covered_net,
-        "covered_cogs": covered_cogs,
-        "gross_profit_reported": gross_profit,
-        "gross_margin_pct_reported": margin_pct,
-        "coverage_status": coverage_status,
-    }
+    return _build_financials_payload(
+        tx_count=int(tx_row.tx_count or 0) if tx_row else 0,
+        total_units=int(tx_row.total_units or 0) if tx_row else 0,
+        raw_gmv=float(tx_row.gross_gmv or 0.0) if tx_row else 0.0,
+        raw_discounts=float(tx_row.discounts or 0.0) if tx_row else 0.0,
+        raw_refunds=float(ref_row.refunds_total or 0.0) if ref_row else 0.0,
+        covered_count=int(tx_row.covered_count or 0) if tx_row else 0,
+        covered_gross=float(tx_row.covered_gross or 0.0) if tx_row else 0.0,
+        covered_disc=float(tx_row.covered_disc or 0.0) if tx_row else 0.0,
+        covered_ref=float(ref_row.covered_refunds or 0.0) if ref_row else 0.0,
+        raw_covered_cogs=float(tx_row.covered_cogs or 0.0) if tx_row else 0.0,
+    )
 
 
 def _compute_trends(
@@ -423,16 +443,35 @@ def _compute_customer_kpis(
     is_platform_scope = vendor_id is None
     total_registered = int(db.query(func.count(Customer.customer_id)).scalar() or 0) if is_platform_scope else None
 
-    base_q = db.query(
-        func.count(func.distinct(Transaction.customer_id)).label("purchasing"),
-        func.coalesce(func.sum(Transaction.amount), 0.0).label("cust_rev"),
-        func.max(Transaction.transaction_date).label("max_tx_date"),
-    ).filter(Transaction.customer_id.isnot(None))
-    row = _apply_tx_filters(base_q, start_dt, end_dt_excl, vendor_id).first()
+    cust_agg_subq = (
+        _apply_tx_filters(
+            db.query(
+                Transaction.customer_id.label("customer_id"),
+                func.count(Transaction.transaction_id).label("tx_count"),
+                func.coalesce(func.sum(Transaction.amount), 0.0).label("total_spend"),
+                func.max(Transaction.transaction_date).label("last_tx_date"),
+            ).filter(Transaction.customer_id.isnot(None)),
+            start_dt,
+            end_dt_excl,
+            vendor_id,
+        )
+        .group_by(Transaction.customer_id)
+        .subquery()
+    )
+    row = db.query(
+        func.count(cust_agg_subq.c.customer_id).label("purchasing"),
+        func.coalesce(func.sum(cust_agg_subq.c.total_spend), 0.0).label("cust_rev"),
+        func.max(cust_agg_subq.c.last_tx_date).label("max_tx_date"),
+        func.coalesce(
+            func.sum(case((cust_agg_subq.c.tx_count >= 2, 1), else_=0)),
+            0,
+        ).label("repeat_count"),
+    ).first()
 
     purchasing = int(row.purchasing or 0) if row else 0
     cust_rev = float(row.cust_rev or 0.0) if row else 0.0
     max_tx_date = row.max_tx_date if row else None
+    repeat_count = int(row.repeat_count or 0) if row else 0
 
     if purchasing == 0:
         return {
@@ -443,16 +482,6 @@ def _compute_customer_kpis(
             "repeat_purchase_rate_pct": 0.0 if total_registered else None,
             "avg_customer_spend": 0.0,
         }
-
-    # Repeat buyers (>= 2 orders in scope) via SQL grouped subquery
-    repeat_subq = _apply_tx_filters(
-        db.query(Transaction.customer_id)
-        .filter(Transaction.customer_id.isnot(None)),
-        start_dt,
-        end_dt_excl,
-        vendor_id,
-    ).group_by(Transaction.customer_id).having(func.count(Transaction.transaction_id) >= 2).subquery()
-    repeat_count = int(db.query(func.count()).select_from(repeat_subq).scalar() or 0)
 
     # 90-day active window anchored consistent with inventory_service._get_reference_anchor_date
     now_dt = datetime.utcnow()
@@ -484,42 +513,109 @@ def _compute_customer_kpis(
     }
 
 
-def _compute_vendor_list(
+def _rank_vendors_from_totals(
+    vendor_rows: List[Any],
+    vendor_totals: Dict[int, Dict[str, Any]],
+    total_gmv_override: Optional[float] = None,
+    skip: int = 0,
+    limit: int = 50,
+) -> Dict[str, Any]:
+    """Assemble vendor status counts, rankings, commissions, and payouts from grouped vendor sums."""
+    vendor_map = {int(v.id): v for v in vendor_rows}
+    status_counts: Dict[str, int] = {}
+    for v in vendor_rows:
+        st = str(v.status)
+        status_counts[st] = status_counts.get(st, 0) + 1
+    total_vendors = sum(status_counts.values())
+    active_vendors = sum(status_counts.get(s, 0) for s in OPERATIONAL_VENDOR_STATUSES)
+    pending_vendors = status_counts.get("PENDING_APPROVAL", 0)
+
+    raw_total_gmv = 0.0
+    raw_total_disc = 0.0
+    raw_total_ref = 0.0
+    valid_entries = []
+    for vid, sums in vendor_totals.items():
+        v_meta = vendor_map.get(vid)
+        if v_meta is None:
+            continue
+        gross_raw = sums["gross"]
+        disc_raw = sums["disc"]
+        ref_raw = sums["ref"]
+        raw_total_gmv += gross_raw
+        raw_total_disc += disc_raw
+        raw_total_ref += ref_raw
+        valid_entries.append((vid, v_meta, sums, gross_raw, disc_raw, ref_raw))
+
+    valid_entries.sort(key=lambda item: (-item[3], item[0]))
+    computed_gmv = round(raw_total_gmv, 2)
+    computed_net = max(0.0, round(raw_total_gmv - raw_total_disc - raw_total_ref, 2))
+    share_denom = float(total_gmv_override) if total_gmv_override is not None else computed_gmv
+
+    ranked: List[Dict[str, Any]] = []
+    for idx, (vid, v_meta, sums, gross_raw, disc_raw, ref_raw) in enumerate(valid_entries, start=1):
+        gross = round(gross_raw, 2)
+        disc = round(disc_raw, 2)
+        ref = round(ref_raw, 2)
+        net = max(0.0, round(gross - disc - ref, 2))
+        rate = float(v_meta.commission_rate or 0.12)
+        comm = round(net * rate, 2)
+        payout = round(net - comm, 2)
+        share = round((gross / share_denom) * 100.0, 2) if share_denom > 0 else 0.0
+        ranked.append({
+            "vendor_id": vid,
+            "vendor_name": v_meta.name,
+            "status": str(v_meta.status or "UNKNOWN"),
+            "commission_tier": str(v_meta.commission_tier or "TIER_STANDARD"),
+            "commission_rate": round(rate, 4),
+            "gross_revenue": gross,
+            "discounts_allocated": disc,
+            "refunds_deducted": ref,
+            "net_sales": net,
+            "platform_commission": comm,
+            "vendor_payout": payout,
+            "units_sold": int(sums["units"]),
+            "order_count": int(sums["orders"]),
+            "rank": idx,
+            "market_share_pct": share,
+        })
+
+    return {
+        "total_vendors": total_vendors,
+        "active_vendors": active_vendors,
+        "pending_approval_vendors": pending_vendors,
+        "vendors_with_sales": len(ranked),
+        "total_gmv": computed_gmv,
+        "total_net_sales": computed_net,
+        "vendors": ranked[skip : skip + limit],
+    }
+
+
+def _compute_vendor_aggregates(
     db: Session,
     start_dt: Optional[datetime],
     end_dt_excl: Optional[datetime],
-    total_gmv: float,
+    total_gmv_override: Optional[float] = None,
     vendor_id: Optional[int] = None,
     skip: int = 0,
     limit: int = 50,
-) -> List[Dict[str, Any]]:
-    """Compute ranked SQL vendor revenue, refunds, net sales, commissions, payouts, and share %."""
-    agg_q = (
-        db.query(
-            Transaction.vendor_id,
-            Vendor.name.label("vendor_name"),
-            Vendor.status,
-            Vendor.commission_tier,
-            Vendor.commission_rate,
-            func.coalesce(func.sum(Transaction.amount), 0.0).label("gross_revenue"),
-            func.coalesce(func.sum(Transaction.discount_amount), 0.0).label("discounts"),
-            func.coalesce(func.sum(Transaction.quantity), 0).label("units_sold"),
-            func.count(Transaction.transaction_id).label("order_count"),
-        )
-        .join(Vendor, Transaction.vendor_id == Vendor.id)
+) -> Dict[str, Any]:
+    """Compute ranked vendor metrics, status counts, and GMV/net totals via integer-key GROUP BY."""
+    vendor_rows = db.query(
+        Vendor.id,
+        Vendor.name,
+        Vendor.status,
+        Vendor.commission_tier,
+        Vendor.commission_rate,
+    ).all()
+
+    agg_q = db.query(
+        Transaction.vendor_id,
+        func.coalesce(func.sum(Transaction.amount), 0.0).label("gross_revenue"),
+        func.coalesce(func.sum(Transaction.discount_amount), 0.0).label("discounts"),
+        func.coalesce(func.sum(Transaction.quantity), 0).label("units_sold"),
+        func.count(Transaction.transaction_id).label("order_count"),
     )
-    rows = (
-        _apply_tx_filters(agg_q, start_dt, end_dt_excl, vendor_id)
-        .group_by(
-            Transaction.vendor_id,
-            Vendor.name,
-            Vendor.status,
-            Vendor.commission_tier,
-            Vendor.commission_rate,
-        )
-        .order_by(func.sum(Transaction.amount).desc(), Transaction.vendor_id.asc())
-        .all()
-    )
+    rows = _apply_tx_filters(agg_q, start_dt, end_dt_excl, vendor_id).group_by(Transaction.vendor_id).all()
 
     ref_q = (
         db.query(
@@ -532,36 +628,44 @@ def _compute_vendor_list(
     ref_rows = _apply_tx_filters(ref_q, start_dt, end_dt_excl, vendor_id).group_by(Transaction.vendor_id).all()
     refund_map = {int(r.vendor_id): float(r.refunds or 0.0) for r in ref_rows}
 
-    ranked: List[Dict[str, Any]] = []
-    for idx, r in enumerate(rows, start=1):
-        vid = int(r.vendor_id)
-        gross = round(float(r.gross_revenue or 0.0), 2)
-        disc = round(float(r.discounts or 0.0), 2)
-        ref = round(refund_map.get(vid, 0.0), 2)
-        net = max(0.0, round(gross - disc - ref, 2))
-        rate = float(r.commission_rate or 0.12)
-        comm = round(net * rate, 2)
-        payout = round(net - comm, 2)
-        share = round((gross / total_gmv) * 100.0, 2) if total_gmv > 0 else 0.0
-        ranked.append({
-            "vendor_id": vid,
-            "vendor_name": r.vendor_name,
-            "status": str(r.status or "UNKNOWN"),
-            "commission_tier": str(r.commission_tier or "TIER_STANDARD"),
-            "commission_rate": round(rate, 4),
-            "gross_revenue": gross,
-            "discounts_allocated": disc,
-            "refunds_deducted": ref,
-            "net_sales": net,
-            "platform_commission": comm,
-            "vendor_payout": payout,
-            "units_sold": int(r.units_sold or 0),
-            "order_count": int(r.order_count or 0),
-            "rank": idx,
-            "market_share_pct": share,
-        })
+    vendor_totals = {
+        int(r.vendor_id): {
+            "gross": float(r.gross_revenue or 0.0),
+            "disc": float(r.discounts or 0.0),
+            "ref": refund_map.get(int(r.vendor_id), 0.0),
+            "units": int(r.units_sold or 0),
+            "orders": int(r.order_count or 0),
+        }
+        for r in rows
+    }
+    return _rank_vendors_from_totals(
+        vendor_rows=vendor_rows,
+        vendor_totals=vendor_totals,
+        total_gmv_override=total_gmv_override,
+        skip=skip,
+        limit=limit,
+    )
 
-    return ranked[skip : skip + limit]
+
+def _compute_vendor_list(
+    db: Session,
+    start_dt: Optional[datetime],
+    end_dt_excl: Optional[datetime],
+    total_gmv: float,
+    vendor_id: Optional[int] = None,
+    skip: int = 0,
+    limit: int = 50,
+) -> List[Dict[str, Any]]:
+    """Compute ranked SQL vendor revenue, refunds, net sales, commissions, payouts, and share %."""
+    return _compute_vendor_aggregates(
+        db,
+        start_dt=start_dt,
+        end_dt_excl=end_dt_excl,
+        total_gmv_override=total_gmv,
+        vendor_id=vendor_id,
+        skip=skip,
+        limit=limit,
+    )["vendors"]
 
 
 def _compute_product_overview(
@@ -570,109 +674,195 @@ def _compute_product_overview(
     end_dt_excl: Optional[datetime],
     vendor_id: Optional[int] = None,
     limit: int = 10,
+    include_financials: bool = False,
+    include_vendors: bool = False,
+    vendor_skip: int = 0,
+    vendor_limit: int = 50,
 ) -> Dict[str, Any]:
-    """Compute SQL-aggregated top products with honest cost-covered gross profit and stock status."""
-    prod_meta_q = (
+    """Compute SQL-aggregated top products and optionally derive financials and vendor rankings."""
+    prod_rows = (
         db.query(
             Product.id,
-            Product.cost_price,
-        )
-    )
-    if vendor_id is not None:
-        prod_meta_q = prod_meta_q.filter(Product.vendor_id == vendor_id)
-    prod_rows = prod_meta_q.all()
-    total_products = len(prod_rows)
-    products_with_cost_data = sum(1 for p in prod_rows if p.cost_price is not None)
-
-    agg_q = (
-        db.query(
-            Transaction.product_id,
-            Product.name.label("product_name"),
+            Product.name,
             Product.category,
             Product.vendor_id,
             Product.cost_price,
             Vendor.name.label("vendor_name"),
             Inventory.current_stock,
             Inventory.reorder_level,
+        )
+        .join(Vendor, Product.vendor_id == Vendor.id)
+        .outerjoin(Inventory, Product.id == Inventory.product_id)
+        .all()
+    )
+    prod_map = {int(p.id): p for p in prod_rows}
+    scoped_prods = [p for p in prod_rows if vendor_id is None or int(p.vendor_id) == vendor_id]
+    total_products = len(scoped_prods)
+    products_with_cost_data = sum(1 for p in scoped_prods if p.cost_price is not None)
+
+    if include_vendors:
+        agg_q = db.query(
+            Transaction.product_id,
+            Transaction.vendor_id,
             func.coalesce(func.sum(Transaction.amount), 0.0).label("gross_revenue"),
             func.coalesce(func.sum(Transaction.discount_amount), 0.0).label("discounts"),
             func.coalesce(func.sum(Transaction.quantity), 0).label("units_sold"),
             func.count(Transaction.transaction_id).label("order_count"),
         )
-        .join(Product, Transaction.product_id == Product.id)
-        .join(Vendor, Transaction.vendor_id == Vendor.id)
-        .outerjoin(Inventory, Product.id == Inventory.product_id)
-    )
-    rows = (
-        _apply_tx_filters(agg_q, start_dt, end_dt_excl, vendor_id)
-        .group_by(
-            Transaction.product_id,
-            Product.name,
-            Product.category,
-            Product.vendor_id,
-            Product.cost_price,
-            Vendor.name,
-            Inventory.current_stock,
-            Inventory.reorder_level,
-        )
-        .order_by(func.sum(Transaction.amount).desc(), Transaction.product_id.asc())
-        .all()
-    )
+        rows = _apply_tx_filters(agg_q, start_dt, end_dt_excl, vendor_id).group_by(
+            Transaction.product_id, Transaction.vendor_id
+        ).all()
 
-    ref_q = (
-        db.query(
-            Transaction.product_id,
-            func.coalesce(func.sum(Refund.amount), 0.0).label("refunds"),
+        ref_q = (
+            db.query(
+                Transaction.product_id,
+                Transaction.vendor_id,
+                func.coalesce(func.sum(Refund.amount), 0.0).label("refunds"),
+            )
+            .join(Transaction, Refund.transaction_id == Transaction.transaction_id)
+            .filter(Refund.status == "COMPLETED")
         )
-        .join(Transaction, Refund.transaction_id == Transaction.transaction_id)
-        .filter(Refund.status == "COMPLETED")
-    )
-    ref_rows = _apply_tx_filters(ref_q, start_dt, end_dt_excl, vendor_id).group_by(Transaction.product_id).all()
-    refund_map = {int(r.product_id): float(r.refunds or 0.0) for r in ref_rows}
+        ref_rows = _apply_tx_filters(ref_q, start_dt, end_dt_excl, vendor_id).group_by(
+            Transaction.product_id, Transaction.vendor_id
+        ).all()
+    else:
+        agg_q = db.query(
+            Transaction.product_id,
+            func.coalesce(func.sum(Transaction.amount), 0.0).label("gross_revenue"),
+            func.coalesce(func.sum(Transaction.discount_amount), 0.0).label("discounts"),
+            func.coalesce(func.sum(Transaction.quantity), 0).label("units_sold"),
+            func.count(Transaction.transaction_id).label("order_count"),
+        )
+        rows = _apply_tx_filters(agg_q, start_dt, end_dt_excl, vendor_id).group_by(
+            Transaction.product_id
+        ).all()
 
-    items: List[Dict[str, Any]] = []
+        ref_q = (
+            db.query(
+                Transaction.product_id,
+                func.coalesce(func.sum(Refund.amount), 0.0).label("refunds"),
+            )
+            .join(Transaction, Refund.transaction_id == Transaction.transaction_id)
+            .filter(Refund.status == "COMPLETED")
+        )
+        ref_rows = _apply_tx_filters(ref_q, start_dt, end_dt_excl, vendor_id).group_by(
+            Transaction.product_id
+        ).all()
+
+    prod_buckets: Dict[int, Dict[str, Any]] = {}
+    vendor_totals: Dict[int, Dict[str, Any]] = {}
     for r in rows:
         pid = int(r.product_id)
-        gross = round(float(r.gross_revenue or 0.0), 2)
-        disc = round(float(r.discounts or 0.0), 2)
-        ref = round(refund_map.get(pid, 0.0), 2)
-        net = max(0.0, round(gross - disc - ref, 2))
+        gross_raw = float(r.gross_revenue or 0.0)
+        disc_raw = float(r.discounts or 0.0)
         units = int(r.units_sold or 0)
+        orders = int(r.order_count or 0)
 
-        has_cost = r.cost_price is not None
+        pb = prod_buckets.setdefault(pid, {"gross": 0.0, "disc": 0.0, "ref": 0.0, "units": 0, "orders": 0})
+        pb["gross"] += gross_raw
+        pb["disc"] += disc_raw
+        pb["units"] += units
+        pb["orders"] += orders
+
+        if include_vendors:
+            vid = int(r.vendor_id)
+            vb = vendor_totals.setdefault(vid, {"gross": 0.0, "disc": 0.0, "ref": 0.0, "units": 0, "orders": 0})
+            vb["gross"] += gross_raw
+            vb["disc"] += disc_raw
+            vb["units"] += units
+            vb["orders"] += orders
+
+    for rr in ref_rows:
+        pid = int(rr.product_id)
+        ref_raw = float(rr.refunds or 0.0)
+        if pid in prod_buckets:
+            prod_buckets[pid]["ref"] += ref_raw
+        if include_vendors:
+            vid = int(rr.vendor_id)
+            if vid in vendor_totals:
+                vendor_totals[vid]["ref"] += ref_raw
+
+    tx_count_total = 0
+    units_total = 0
+    raw_gmv_total = 0.0
+    raw_disc_total = 0.0
+    raw_ref_total = 0.0
+    covered_count = 0
+    covered_gross = 0.0
+    covered_disc = 0.0
+    covered_ref = 0.0
+    raw_covered_cogs = 0.0
+
+    raw_items: List[Tuple[float, int, Dict[str, Any]]] = []
+    for pid, b in prod_buckets.items():
+        meta = prod_map.get(pid)
+        if meta is None:
+            continue
+
+        gross_raw = b["gross"]
+        disc_raw = b["disc"]
+        ref_raw = b["ref"]
+        units = int(b["units"])
+        orders = int(b["orders"])
+
+        tx_count_total += orders
+        units_total += units
+        raw_gmv_total += gross_raw
+        raw_disc_total += disc_raw
+        raw_ref_total += ref_raw
+
+        gross = round(gross_raw, 2)
+        disc = round(disc_raw, 2)
+        ref = round(ref_raw, 2)
+        net = max(0.0, round(gross - disc - ref, 2))
+
+        has_cost = meta.cost_price is not None
         if has_cost:
-            cogs = round(float(r.cost_price) * units, 2)
+            unit_cost = float(meta.cost_price)
+            covered_count += orders
+            covered_gross += gross_raw
+            covered_disc += disc_raw
+            covered_ref += ref_raw
+            raw_covered_cogs += unit_cost * units
+
+            cogs = round(unit_cost * units, 2)
             profit = round(net - cogs, 2)
             margin = round((profit / net) * 100.0, 2) if net > 0 else None
         else:
             profit = None
             margin = None
 
-        stock = int(r.current_stock) if r.current_stock is not None else 0
-        reorder = int(r.reorder_level) if r.reorder_level is not None else 10
+        stock = int(meta.current_stock) if meta.current_stock is not None else 0
+        reorder = int(meta.reorder_level) if meta.reorder_level is not None else 10
         stock_status = "CRITICAL" if stock == 0 else ("LOW_STOCK" if stock <= reorder else "HEALTHY")
 
-        items.append({
-            "product_id": pid,
-            "product_name": r.product_name,
-            "category": r.category or "General",
-            "vendor_id": int(r.vendor_id),
-            "vendor_name": r.vendor_name,
-            "gross_revenue": gross,
-            "net_sales": net,
-            "units_sold": units,
-            "order_count": int(r.order_count or 0),
-            "has_cost_data": has_cost,
-            "gross_profit_reported": profit,
-            "gross_margin_pct": margin,
-            "current_stock": stock,
-            "stock_status": stock_status,
-        })
+        raw_items.append((
+            gross_raw,
+            pid,
+            {
+                "product_id": pid,
+                "product_name": meta.name,
+                "category": meta.category or "General",
+                "vendor_id": int(meta.vendor_id),
+                "vendor_name": meta.vendor_name,
+                "gross_revenue": gross,
+                "net_sales": net,
+                "units_sold": units,
+                "order_count": orders,
+                "has_cost_data": has_cost,
+                "gross_profit_reported": profit,
+                "gross_margin_pct": margin,
+                "current_stock": stock,
+                "stock_status": stock_status,
+            },
+        ))
 
+    raw_items.sort(key=lambda t: (-t[0], t[1]))
+    items = [entry[2] for entry in raw_items]
     top_by_rev = items[0] if items else None
     top_by_units = max(items, key=lambda x: (x["units_sold"], -x["product_id"])) if items else None
 
-    return {
+    result: Dict[str, Any] = {
         "total_products": total_products,
         "products_with_sales": len(items),
         "products_with_cost_data": products_with_cost_data,
@@ -680,6 +870,41 @@ def _compute_product_overview(
         "top_product_by_units": top_by_units,
         "top_products": items[:limit],
     }
+
+    financials_payload: Optional[Dict[str, Any]] = None
+    if include_financials:
+        financials_payload = _build_financials_payload(
+            tx_count=tx_count_total,
+            total_units=units_total,
+            raw_gmv=raw_gmv_total,
+            raw_discounts=raw_disc_total,
+            raw_refunds=raw_ref_total,
+            covered_count=covered_count,
+            covered_gross=covered_gross,
+            covered_disc=covered_disc,
+            covered_ref=covered_ref,
+            raw_covered_cogs=raw_covered_cogs,
+        )
+        result["_financials"] = financials_payload
+
+    if include_vendors:
+        vendor_rows = db.query(
+            Vendor.id,
+            Vendor.name,
+            Vendor.status,
+            Vendor.commission_tier,
+            Vendor.commission_rate,
+        ).all()
+        gmv_override = financials_payload["gross_sales_gmv"] if financials_payload else None
+        result["_vendors"] = _rank_vendors_from_totals(
+            vendor_rows=vendor_rows,
+            vendor_totals=vendor_totals,
+            total_gmv_override=gmv_override,
+            skip=vendor_skip,
+            limit=vendor_limit,
+        )
+
+    return result
 
 
 def _compute_inventory_health(db: Session, vendor_id: Optional[int] = None) -> Dict[str, Any]:
@@ -726,6 +951,47 @@ def _compute_inventory_health(db: Session, vendor_id: Optional[int] = None) -> D
     }
 
 
+def _rollup_monthly_from_daily(daily_series: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Aggregate chronological monthly buckets directly from daily series without re-scanning Transactions."""
+    grouped: Dict[str, Dict[str, Any]] = {}
+    for row in daily_series:
+        month_key = str(row["period"])[:7]
+        bucket = grouped.setdefault(
+            month_key,
+            {"gmv": 0.0, "discounts": 0.0, "refunds": 0.0, "units_sold": 0, "orders": 0},
+        )
+        bucket["gmv"] += float(row["gmv"])
+        bucket["discounts"] += float(row["discounts"])
+        bucket["refunds"] += float(row["refunds"])
+        bucket["units_sold"] += int(row["units_sold"])
+        bucket["orders"] += int(row["orders"])
+
+    monthly: List[Dict[str, Any]] = []
+    prev_gmv: Optional[float] = None
+    for month_key in sorted(grouped.keys()):
+        b = grouped[month_key]
+        gmv = round(b["gmv"], 2)
+        disc = round(b["discounts"], 2)
+        ref = round(b["refunds"], 2)
+        net = max(0.0, round(gmv - disc - ref, 2))
+        orders = int(b["orders"])
+        aov = round(gmv / orders, 2) if orders > 0 else 0.0
+        growth = _pct_change(gmv, prev_gmv)
+        prev_gmv = gmv
+        monthly.append({
+            "period": month_key,
+            "gmv": gmv,
+            "discounts": disc,
+            "refunds": ref,
+            "net_sales": net,
+            "units_sold": int(b["units_sold"]),
+            "orders": orders,
+            "avg_order_value": aov,
+            "growth_pct": growth,
+        })
+    return monthly
+
+
 def get_executive_summary(
     db: Session,
     start_date: Optional[date] = None,
@@ -737,7 +1003,19 @@ def get_executive_summary(
     start_dt, end_dt_excl, filter_meta = _normalize_date_bounds(start_date, end_date)
     filter_meta["vendor_id"] = vendor_id
 
-    financials = _compute_financial_kpis(db, start_dt, end_dt_excl, vendor_id=vendor_id)
+    products = _compute_product_overview(
+        db,
+        start_dt,
+        end_dt_excl,
+        vendor_id=vendor_id,
+        limit=top_n,
+        include_financials=True,
+        include_vendors=True,
+        vendor_skip=0,
+        vendor_limit=max(top_n, 1),
+    )
+    financials = products.pop("_financials")
+    vendor_agg = products.pop("_vendors")
     monthly_series = _compute_trends(db, "monthly", start_dt, end_dt_excl, vendor_id=vendor_id)
     comparison = _compute_period_comparison(
         db,
@@ -748,31 +1026,7 @@ def get_executive_summary(
         vendor_id=vendor_id,
     )
     customers = _compute_customer_kpis(db, start_dt, end_dt_excl, vendor_id=vendor_id)
-
-    vendor_status_rows = db.query(Vendor.status, func.count(Vendor.id)).group_by(Vendor.status).all()
-    status_counts = {str(s): int(c) for s, c in vendor_status_rows}
-    total_vendors = sum(status_counts.values())
-    active_vendors = sum(status_counts.get(s, 0) for s in OPERATIONAL_VENDOR_STATUSES)
-    pending_vendors = status_counts.get("PENDING_APPROVAL", 0)
-
-    ranked_vendors = _compute_vendor_list(
-        db,
-        start_dt=start_dt,
-        end_dt_excl=end_dt_excl,
-        total_gmv=financials["gross_sales_gmv"],
-        vendor_id=vendor_id,
-        skip=0,
-        limit=max(top_n, 1),
-    )
-    vendors_with_sales_q = _apply_tx_filters(
-        db.query(func.count(func.distinct(Transaction.vendor_id))),
-        start_dt,
-        end_dt_excl,
-        vendor_id,
-    )
-    vendors_with_sales = int(vendors_with_sales_q.scalar() or 0)
-
-    products = _compute_product_overview(db, start_dt, end_dt_excl, vendor_id=vendor_id, limit=top_n)
+    ranked_vendors = vendor_agg["vendors"]
     inventory_health = _compute_inventory_health(db, vendor_id=vendor_id)
 
     latest_m = monthly_series[-1] if monthly_series else None
@@ -790,10 +1044,10 @@ def get_executive_summary(
         "period_comparison": comparison,
         "customers": customers,
         "vendors": {
-            "total_vendors": total_vendors,
-            "active_vendors": active_vendors,
-            "pending_approval_vendors": pending_vendors,
-            "vendors_with_sales": vendors_with_sales,
+            "total_vendors": vendor_agg["total_vendors"],
+            "active_vendors": vendor_agg["active_vendors"],
+            "pending_approval_vendors": vendor_agg["pending_approval_vendors"],
+            "vendors_with_sales": vendor_agg["vendors_with_sales"],
             "top_vendor": ranked_vendors[0] if ranked_vendors else None,
             "top_vendors": ranked_vendors,
         },
@@ -820,9 +1074,7 @@ def get_executive_trends(
 
     financials = _compute_financial_kpis(db, start_dt, end_dt_excl, vendor_id=vendor_id)
     series = _compute_trends(db, norm_gran, start_dt, end_dt_excl, vendor_id=vendor_id)
-    monthly_for_cmp = (
-        series if norm_gran == "monthly" else _compute_trends(db, "monthly", start_dt, end_dt_excl, vendor_id=vendor_id)
-    )
+    monthly_for_cmp = series if norm_gran == "monthly" else _rollup_monthly_from_daily(series)
     comparison = _compute_period_comparison(
         db,
         start_date=start_date,
@@ -853,24 +1105,25 @@ def get_executive_vendors_and_products(
     start_dt, end_dt_excl, filter_meta = _normalize_date_bounds(start_date, end_date)
     filter_meta["vendor_id"] = None
 
-    financials = _compute_financial_kpis(db, start_dt, end_dt_excl, vendor_id=None)
-    vendors = _compute_vendor_list(
+    products = _compute_product_overview(
         db,
-        start_dt=start_dt,
-        end_dt_excl=end_dt_excl,
-        total_gmv=financials["gross_sales_gmv"],
+        start_dt,
+        end_dt_excl,
         vendor_id=None,
-        skip=skip,
         limit=limit,
+        include_financials=False,
+        include_vendors=True,
+        vendor_skip=skip,
+        vendor_limit=limit,
     )
-    products = _compute_product_overview(db, start_dt, end_dt_excl, vendor_id=None, limit=limit)
+    vendor_agg = products.pop("_vendors")
 
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "filters": filter_meta,
-        "total_gmv": financials["gross_sales_gmv"],
-        "total_net_sales": financials["net_sales"],
-        "vendors": vendors,
+        "total_gmv": vendor_agg["total_gmv"],
+        "total_net_sales": vendor_agg["total_net_sales"],
+        "vendors": vendor_agg["vendors"],
         "products": products["top_products"],
     }
 
@@ -890,7 +1143,15 @@ def get_vendor_tenant_executive_summary(
     start_dt, end_dt_excl, filter_meta = _normalize_date_bounds(start_date, end_date)
     filter_meta["vendor_id"] = vendor_id
 
-    financials = _compute_financial_kpis(db, start_dt, end_dt_excl, vendor_id=vendor_id)
+    products = _compute_product_overview(
+        db,
+        start_dt,
+        end_dt_excl,
+        vendor_id=vendor_id,
+        limit=top_n,
+        include_financials=True,
+    )
+    financials = products.pop("_financials")
     monthly_series = _compute_trends(db, "monthly", start_dt, end_dt_excl, vendor_id=vendor_id)
     comparison = _compute_period_comparison(
         db,
@@ -901,7 +1162,6 @@ def get_vendor_tenant_executive_summary(
         vendor_id=vendor_id,
     )
     customers = _compute_customer_kpis(db, start_dt, end_dt_excl, vendor_id=vendor_id)
-    products = _compute_product_overview(db, start_dt, end_dt_excl, vendor_id=vendor_id, limit=top_n)
     inventory_health = _compute_inventory_health(db, vendor_id=vendor_id)
 
     latest_m = monthly_series[-1] if monthly_series else None

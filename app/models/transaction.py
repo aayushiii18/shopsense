@@ -7,7 +7,7 @@ Supports discount allocations, payment methods, payment status, snapshotted comm
 """
 
 from datetime import datetime
-from sqlalchemy import Integer, Float, String, DateTime, ForeignKey, func, CheckConstraint, UniqueConstraint
+from sqlalchemy import Integer, Float, String, DateTime, ForeignKey, Index, func, CheckConstraint, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship, synonym
 from app.database import Base
 
@@ -21,6 +21,10 @@ class Transaction(Base):
         CheckConstraint("amount > 0", name="ck_transaction_amount_positive"),
         CheckConstraint("discount_amount >= 0", name="ck_transaction_discount_nonnegative"),
         UniqueConstraint("source_system", "source_transaction_id", name="uq_transaction_source"),
+        Index("ix_transactions_transaction_date", "transaction_date"),
+        Index("ix_transactions_vendor_date", "vendor_id", "transaction_date"),
+        Index("ix_transactions_product_date", "product_id", "transaction_date"),
+        Index("ix_transactions_customer_date", "customer_id", "transaction_date"),
     )
 
     transaction_id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)

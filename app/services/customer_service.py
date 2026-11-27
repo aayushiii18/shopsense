@@ -8,11 +8,11 @@ Features:
   4. Marketplace Customer Lifetime Value & Cohort Summary.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 import numpy as np
 import pandas as pd
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, case
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score, silhouette_samples, davies_bouldin_score, calinski_harabasz_score
@@ -23,7 +23,7 @@ from app.models.transaction import Transaction
 
 def get_customer_summary(db: Session) -> dict:
     """
-    Computes overall customer base KPIs:
+    Computes overall customer base KPIs directly in SQL without materializing all transaction rows:
       - Total registered customers
       - Active customers (purchased in last 90 days)
       - Repeat customers (placed >= 2 orders)
@@ -31,7 +31,7 @@ def get_customer_summary(db: Session) -> dict:
       - Average customer lifetime spend
       - Average order value (AOV) across all customer transactions
     """
-    total_customers = db.query(func.count(Customer.customer_id)).scalar() or 0
+    total_customers = int(db.query(func.count(Customer.customer_id)).scalar() or 0)
     if total_customers == 0:
         return {
             "total_customers": 0,
@@ -43,18 +43,26 @@ def get_customer_summary(db: Session) -> dict:
             "total_customer_revenue": 0.0,
         }
 
-    # Query customer transactions
-    txns = (
+    cust_agg = (
         db.query(
-            Transaction.customer_id,
-            Transaction.amount,
-            Transaction.transaction_date,
+            Transaction.customer_id.label("cid"),
+            func.count(Transaction.transaction_id).label("order_count"),
+            func.coalesce(func.sum(Transaction.amount), 0.0).label("total_spend"),
+            func.max(Transaction.transaction_date).label("last_purchase"),
         )
         .filter(Transaction.customer_id.isnot(None))
-        .all()
+        .group_by(Transaction.customer_id)
+        .subquery()
     )
 
-    if not txns:
+    summary_row = db.query(
+        func.coalesce(func.sum(cust_agg.c.order_count), 0).label("total_orders"),
+        func.coalesce(func.sum(cust_agg.c.total_spend), 0.0).label("total_revenue"),
+        func.coalesce(func.sum(case((cust_agg.c.order_count >= 2, 1), else_=0)), 0).label("repeat_count"),
+        func.max(cust_agg.c.last_purchase).label("max_date"),
+    ).first()
+
+    if not summary_row or not summary_row.total_orders:
         return {
             "total_customers": total_customers,
             "active_customers_90d": 0,
@@ -65,28 +73,23 @@ def get_customer_summary(db: Session) -> dict:
             "total_customer_revenue": 0.0,
         }
 
-    df = pd.DataFrame([
-        {"customer_id": t.customer_id, "amount": float(t.amount), "txn_date": t.transaction_date}
-        for t in txns
-    ])
+    total_orders = int(summary_row.total_orders)
+    total_revenue = round(float(summary_row.total_revenue), 2)
+    repeat_count = int(summary_row.repeat_count or 0)
+    max_date = summary_row.max_date
+    ninety_days_ago = max_date - timedelta(days=90)
 
-    # Reference max date
-    max_date = df["txn_date"].max()
-    ninety_days_ago = max_date - pd.Timedelta(days=90)
+    active_count = int(
+        db.query(func.count())
+        .select_from(cust_agg)
+        .filter(cust_agg.c.last_purchase >= ninety_days_ago)
+        .scalar()
+        or 0
+    )
 
-    # Aggregations per customer
-    grouped = df.groupby("customer_id").agg(
-        order_count=("amount", "count"),
-        total_spend=("amount", "sum"),
-        last_purchase=("txn_date", "max"),
-    ).reset_index()
-
-    active_count = int((grouped["last_purchase"] >= ninety_days_ago).sum())
-    repeat_count = int((grouped["order_count"] >= 2).sum())
     repeat_rate = round((repeat_count / total_customers) * 100.0, 2)
-    total_revenue = round(float(df["amount"].sum()), 2)
     avg_customer_spend = round(total_revenue / total_customers, 2)
-    avg_order_value = round(float(df["amount"].mean()), 2)
+    avg_order_value = round(total_revenue / total_orders, 2)
 
     return {
         "total_customers": total_customers,
