@@ -12,8 +12,9 @@
 | [Deployment & Setup Guide](docs/deployment_setup_guide.md) | DevOps & Engineers | Host setup, PostgreSQL config, `.env` secrets, migrations, admin bootstrap, startup & Docker Compose topology |
 | [Operations Manual](docs/operations_manual.md) | Operators & Admins | Health triage, degraded fallback modes, ETL quarantine, MLflow retraining, backups, benchmarks & troubleshooting |
 | [User Guide](docs/user_guide.md) | Admin, Vendor & Customer | Login gate, vendor onboarding/approval, Executive BI, catalog, inventory, refunds, forecasting & recommendations |
-| [UAT Test Plan](docs/uat_test_plan.md) | QA & Stakeholders | 16 role-based UAT scenarios & >= 85% acceptance criteria (**Status: Pending Stakeholder Execution**) |
-| [UAT Recording Template](docs/uat_recording_template.md) | QA & Stakeholders | Stakeholder execution log, defect tracker, usability survey & formal sign-off template |
+| [UAT Test Plan](docs/uat_test_plan.md) | QA & Stakeholders | 16 role-based UAT scenarios & >= 85% acceptance criteria (**External Stakeholder UAT: Pending**) |
+| [UAT Recording Template](docs/uat_recording_template.md) | QA & Stakeholders | Developer pre-UAT execution record + pending stakeholder evaluation & sign-off sheet |
+| [Step 12 UAT Execution Report](docs/uat_execution_report.md) | QA & Engineering | Developer functional UAT outcomes, RBAC/UI verification evidence & defects `DEF-UAT-01..03` |
 | [100K Benchmark Report](docs/benchmark_100k_report.md) | Performance / Eng | Milestone 4 Phase 1 vectorized 100K transaction dataset & analytics benchmark |
 | [Phase 4 Performance Report](docs/phase4_performance_report.md) | Performance / Eng | Integrated live PostgreSQL + isolated 100K relational DB baseline vs post-optimization telemetry |
 | [Step 11 Load Testing Report](docs/load_testing_report.md) | Performance / Ops | Progressive authenticated Locust load test (`50 -> 100` concurrent users, bottlenecks & saturation bounds) |

@@ -83,4 +83,4 @@ Signed-in Customers access a streamlined shopping & self-service experience (`ðŸ
 
 ## 5. Signing Out
 
-Use the **Sign Out** control in the bottom of the left sidebar (or call `POST /auth/logout` / `POST /auth/logout-all`) to revoke your active session cleanly and return to the Login gate.
+Use the **ðŸšª Log Out** control in the bottom of the left sidebar (or call `POST /auth/logout` / `POST /auth/logout-all`) to revoke your active session cleanly and return to the Login gate.

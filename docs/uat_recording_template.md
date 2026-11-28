@@ -1,7 +1,8 @@
-# ShopSense UAT Execution Recording Template & Sign-Off Summary
+# ShopSense UAT Execution Recording Sheet & Acceptance Summary
 
-> **Current UAT Status:** **PENDING STAKEHOLDER EXECUTION**  
-> All status fields, participant details, defects, ratings, and final acceptance decisions below are intentionally blank pending actual evaluation by stakeholders.
+> **Verification Separation Notice:**
+> - **Section 2A (Below):** Records **Developer-Assisted Functional UAT** executed directly against the running ShopSense application (`FastAPI :8000` + `Streamlit :8501` + `MLflow :5000` + `PostgreSQL`) using existing demo accounts and strict non-destructive database rules.
+> - **Sections 2B, 4 & 5 (Stakeholder Execution, Satisfaction Survey & Sign-Offs):** Explicitly marked **`PENDING`** — zero external stakeholder participation, ratings, acceptance percentages, or signatures have been fabricated.
 
 ---
 
@@ -9,84 +10,93 @@
 
 | Field | Entry |
 | :--- | :--- |
-| **UAT Cycle ID** | `UAT-M4-RC1` |
-| **Application Version** | `ShopSense 1.0.0` (Git Commit / Tag: `________________`) |
-| **Test Environment** | `[ ] Local Host` `[ ] Staging` `[ ] Docker Compose` (API URL: `________________`) |
-| **Planned / Actual Dates** | Start: `____-__-__` \| End: `____-__-__` |
-| **Facilitator / QA Coordinator** | `____________________` |
+| **UAT Cycle ID** | `UAT-M4-STEP12` |
+| **Application Version** | `ShopSense 1.0.0` (API metadata `1.0.0`; Streamlit sidebar caption `v2.0` — see `DEF-UAT-03`) |
+| **Environment Tested (Dev Pre-UAT)** | `[x] Local Host` (`http://127.0.0.1:8501` UI / `http://127.0.0.1:8000` API / local `PostgreSQL`) |
+| **Developer Pre-UAT Date** | `2026-11-27` / `2026-11-28` |
+| **Stakeholder UAT Status** | **`PENDING EXTERNAL STAKEHOLDER WALKTHROUGH`** |
 
-### Participating Stakeholders
-| Role Represented | Participant Name | Account / Email Used | Session Completed? |
-| :--- | :--- | :--- | :---: |
-| **Administrator** | `____________________` | `____________________` | `[ ] Yes  [ ] Pending` |
-| **Vendor Partner** | `____________________` | `____________________` | `[ ] Yes  [ ] Pending` |
-| **Customer / Shopper** | `____________________` | `____________________` | `[ ] Yes  [ ] Pending` |
+### Accounts Used in Developer Pre-UAT (Existing Accounts — Zero DB Polluting)
+| Role Represented | Account Used | Live State Verified? |
+| :--- | :--- | :---: |
+| **Administrator** | `admin@shopsense.com` (`user_id=1`) | `[x] Executed live (Browser WebView + AppTest + HTTP)` |
+| **Vendor Partner (Approved)** | `vendor.demo@shopsense.com` (`vendor_id=7`, `Kapoor Smart Living`) | `[x] Executed live (AppTest + HTTP)` |
+| **Customer / Shopper** | `customer.demo@shopsense.com` (`customer_id=61`) | `[x] Executed live (AppTest + HTTP)` |
+| **External Business Stakeholders** | *Not yet assigned / executed* | `[ ] PENDING` |
 
 ---
 
-## 2. Scenario Execution Log
+## 2A. Developer-Assisted Functional Pre-UAT Execution Log (Live PostgreSQL Preserved)
 
-Instructions: Mark **Status** strictly as `PASS`, `PARTIAL`, `FAIL`, or `BLOCKED` based on [uat_test_plan.md](uat_test_plan.md). Record observed behavior or Defect IDs in **Notes / Feedback**.
+Summary across 16 scenarios in [uat_test_plan.md](uat_test_plan.md): **7 `PASS`**, **7 `PARTIAL` (non-destructive scope enforced — mutating commits verified in isolated pytest or deferred to protect live DB; survey pending)**, **1 `BLOCKED` (unowned pending vendor credentials)**, **1 `FAIL` (`DEF-UAT-01` UI refresh-token logout gap)**.
 
-| Scenario ID | Role | Area | Status (`PASS / PARTIAL / FAIL / BLOCKED`) | Severity if Failed (`P0–P3`) | Tester Initials | Observed Notes / Stakeholder Feedback |
-| :--- | :--- | :--- | :---: | :---: | :---: | :--- |
-| **UAT-01** | Prospective Vendor | Login Gate & Vendor Application Form | `PENDING` | — | — | |
-| **UAT-02** | Pending Vendor | Pending Sign-In & Role Guardrails | `PENDING` | — | — | |
-| **UAT-03** | Admin | Pending Queue Review & Approval Confirm | `PENDING` | — | — | |
-| **UAT-04** | Admin / Vendor | Mandatory Rejection Notes & Feedback UI | `PENDING` | — | — | |
-| **UAT-05** | Approved Vendor | Store Catalog & Stock Movement Entry | `PENDING` | — | — | |
-| **UAT-06** | Approved Vendor | Settlements & Cross-Tenant 403 Block | `PENDING` | — | — | |
-| **UAT-07** | Admin | Executive BI KPIs & COGS Honesty Labels | `PENDING` | — | — | |
-| **UAT-08** | Admin | Executive BI Filters, Granularity & Empty State | `PENDING` | — | — | |
-| **UAT-09** | Admin | Demand Forecasting & Inventory Replenishment | `PENDING` | — | — | |
-| **UAT-10** | Admin | Customer Analytics & PDF/Excel Exports | `PENDING` | — | — | |
-| **UAT-11** | Admin | Safe Refund Terminal & Input Guards | `PENDING` | — | — | |
-| **UAT-12** | Admin | ETL Reconciliation & Daily Sales Mart | `PENDING` | — | — | |
-| **UAT-13** | Customer | Registration, Role Menu & Storefront Filter | `PENDING` | — | — | |
-| **UAT-14** | Customer | Hybrid/CF Recommendations & Order Ledger | `PENDING` | — | — | |
-| **UAT-15** | Admin / Security | System Health Diagnostics & Logout Revocation | `PENDING` | — | — | |
-| **UAT-16** | All Roles | Theme Consistency, Chart Clarity & UX | `PENDING` | — | — | |
+| ID | Dev Functional Status | Method & Scope | Observed Evidence & Non-Destructive Guard Notes |
+| :--- | :---: | :--- | :--- |
+| **UAT-01** | `PARTIAL` | Browser WebView + AppTest | Unauthenticated gate blocks all dashboard tabs (`has_nav_radio_before_auth=False`), shows `🟢 Backend API Ready`, `Sign In`, `Register`, and `Register as Vendor` with all required application inputs. Actual submit skipped to keep PostgreSQL `vendors=7` intact (`POST /auth/register-vendor` covered by `test_vendor_onboarding_stage_b.py`). |
+| **UAT-02** | `BLOCKED` | Live DB Preservation | Pending vendor #6 (`aayushi18@gmail.com` / `aayushi's store`) belongs to an existing user record; password not guessed or reset. Pending guardrails verified in `test_vendor_onboarding_stage_a.py` / `stage_b.py` and visible in Admin queue (`UAT-03`). |
+| **UAT-03** | `PARTIAL` | AppTest (`Admin`) | `Pending Applications (1)` renders `aayushi's store` (`ID: 6`, `Owner: Aayushi`). Clicking `Approve Application` triggers confirmation prompt (`Confirm Application APPROVE`), and `Cancel` cleanly aborts without changing vendor status (`PENDING_APPROVAL` preserved). |
+| **UAT-04** | `PARTIAL` | AppTest (`Admin`) | Clicking `Reject Application` with blank notes raises `"Verification/rejection feedback notes are required before rejecting an application."`. Rejection confirmation not committed to preserve vendor #6 state. |
+| **UAT-05** | `PARTIAL` | AppTest (`Vendor #7`) | Signed in as `vendor.demo@shopsense.com` (`Kapoor Smart Living`): `Product Management` shows strictly `4` store SKUs (`100.0/100` catalog quality score); `Inventory Management` shows `110` units / `₹246,090.00` value (`3` Healthy, `1` Low Stock alert). SKU/movement writes skipped to protect DB. |
+| **UAT-06** | `PASS` | AppTest + HTTP (`Vendor #7`) | `Vendor Management` shows `ACTIVE`, `TIER_PREFERRED`, `Net Sales: ₹13,495.00`, `Commission: ₹1,349.50`, `Payable Payout: ₹12,145.50`. UI sidebar hides `Executive BI` & `ETL` (only 6 Vendor views). Live HTTP returns `200` on `/vendor-summary`, **`403`** on `/vendor-summary?vendor_id=1`, and **`403`** on `/analytics/executive/summary`. |
+| **UAT-07** | `PASS` | Browser + AppTest + HTTP | Admin `💎 Executive BI` loads `16` KPI cards (`0` exceptions): `GMV ₹102,060.55`, `Net Sales ₹101,460.55`, `Gross Profit ₹4,755.00` (`13.3%` COGS coverage matching `📊 Dashboard`), `AOV ₹168.42`, `606` orders, `60/61` customers (`98.4%` repeat), `₹330,855.10` stock value. |
+| **UAT-08** | `PASS` | AppTest + HTTP (`Admin`) | `2024-01-01..2024-12-31` filter + `Daily` granularity toggle execute cleanly (`0` errors); future `2030-01-01..2030-01-31` returns `0` txns with friendly empty-state banner; invalid `2025-12-01..2024-01-01` triggers HTTP `422` and UI error `"Invalid Date Filter: Start Date cannot be after End Date."`. |
+| **UAT-09** | `PASS` | AppTest (`Admin`) | `📈 Demand Forecasting` (`3` metrics, 0 exceptions) and `📋 Inventory Management` (`4` metrics, `1` reorder alert, 0 exceptions) render cleanly. |
+| **UAT-10** | `PASS` | Browser + AppTest + HTTP | `👥 Customer Analytics` renders `20` KPI/ML cards cleanly (`0` exceptions). Both PDF (`5,588` bytes) and Excel (`28,644` bytes) export buttons appear enabled on `📊 Dashboard`, and live `/reports/pdf` (`%PDF`) & `/reports/excel` (`PK\x03\x04`) endpoints return valid files. |
+| **UAT-11** | `PARTIAL` | AppTest (`Admin`) | Submitting `Safe Refund Terminal` with empty Audit Reason cleanly enforces `"Audit reason is required for processing refunds."`. Real refund insertion skipped so `refunds=0` in PostgreSQL stays intact. |
+| **UAT-12** | `PASS` | AppTest (`Admin`) | `⚡ ETL & Data Warehouse` renders `10` KPI cards cleanly across Batch Monitoring (`0` uploaded batches), Quarantine, Data Quality, and Daily Sales Mart (`547` mart rows verified intact). |
+| **UAT-13** | `PARTIAL` | AppTest (`Customer #61`) | Customer sign-in lands on `🛍️ Customer Catalog` with strictly `3` Customer views (`Catalog`, `Recommendations`, `Transactions`). Keyword search `"Smart"` filters catalog cards cleanly (`0` exceptions). New registration submit skipped to keep `users=8` / `customers=61` intact. |
+| **UAT-14** | `PASS` | AppTest + HTTP (`Customer #61`) | `🎯 Recommendations` renders Hybrid (`Hit Rate@5 92.7%`, `NDCG@5 0.853`) and CF metrics (`0` exceptions); `💳 Transactions` shows `6` customer orders (`₹14,334.97`, `₹2,389.16` AOV). Live API enforces **`403`** on `/recommend/1` & `/analytics/customers/clv/1` vs `200` on `61`. |
+| **UAT-15** | `FAIL` | Browser + AppTest + HTTP | `🩺 System Health` renders `5/7 Healthy`, `2 Degraded` (fallback models) accurately. Direct API `POST /auth/logout` with `refresh_token` returns `401` on `/auth/refresh` & `/auth/me`. **HOWEVER (`DEF-UAT-01`):** Clicking UI `🚪 Log Out` sends `access_token` instead of `refresh_token` (because `_authenticate_dashboard_user()` discards `refresh_token`), leaving the DB refresh token unrevoked (`200` on `/auth/refresh`). |
+| **UAT-16** | `PARTIAL` | Browser + AppTest | Midnight Navy / Electric Violet styling, hero cards, Plotly charts, and navigation verified across all `21` role-views (`0` runtime exceptions). **Issues (`DEF-UAT-02`, `DEF-UAT-03`):** cold initial `📊 Dashboard` load can take 15–30s sequentially (`DEF-UAT-02`); sidebar displays `v2.0` vs API `1.0.0` (`DEF-UAT-03`). **Stakeholder survey remains `PENDING`.** |
+
+---
+
+## 2B. External Stakeholder UAT Execution Log (`PENDING`)
+
+| Scenario ID | Stakeholder Role | Stakeholder Status | Tester Name | Feedback / Sign-Off |
+| :--- | :--- | :---: | :--- | :--- |
+| **UAT-01 – UAT-16** | Admin / Vendor / Customer Stakeholders | **`PENDING`** | *Awaiting assignment* | *No external stakeholder sessions conducted yet.* |
 
 ---
 
 ## 3. Defect & Observation Log
 
-| Defect ID | Linked UAT ID | Severity (`P0/P1/P2/P3`) | Summary of Observed Issue | Owner | Resolution Status |
+| Defect ID | Linked Scenario | Severity | Observed Issue & Reproduction | Remediation Recommendation | Status |
 | :--- | :--- | :---: | :--- | :--- | :---: |
-| `DEF-___` | | | *No stakeholder defects logged yet (UAT pending).* | | |
+| **`DEF-UAT-01`** | `UAT-15` | **P2 (Medium — Auth Session Hygiene)** | `dashboard/dashboard.py` (`_authenticate_dashboard_user`) stores `access_token` only and drops `refresh_token`. Clicking `🚪 Log Out` sends `{"refresh_token": access_token}` to `POST /auth/logout`, blacklisting the access token JTI (`401`) while leaving the server `refresh_tokens` row unrevoked (`200` on `/auth/refresh`). | Store `resp["refresh_token"]` in `st.session_state["refresh_token"]` upon UI login and pass it cleanly to `POST /auth/logout` on logout (or invoke `/auth/logout-all`). | **Open (Before Final Prod Rollout)** |
+| **`DEF-UAT-02`** | `UAT-16` | **P2 (Medium — Initial Page Latency)** | Cold opening of `📊 Dashboard` (`selected_page == "📊 Dashboard"`) executes 10+ synchronous cross-module API/analytic calls sequentially (hitting ~15–30s cold load during automated `AppTest`). | Lazy-load or consolidate Dashboard summary KPIs into `/analytics/executive/summary` or `@st.cache_data(ttl=60)` slices to eliminate redundant cold sequential fetches. | **Open** |
+| **`DEF-UAT-03`** | `UAT-16`, `README` | **P3 (Low / Cosmetic)** | Sidebar footer renders `ShopSense v2.0 • Enterprise Edition` while `backend/config.py`, `/health/live`, and `/admin/overview` report `1.0.0`. Streamlit logs emit `use_container_width` deprecation warnings. *(Also aligned UI `Sign Out` wording to `🚪 Log Out` in docs.)* | Standardize UI footer version with `VERSION` (`1.0.0`) or `v2.0` release tag and migrate `use_container_width=True` -> `width="stretch"`. | **Open** |
 
 ---
 
-## 4. Stakeholder Usability & Satisfaction Survey (`1 = Strongly Disagree` to `5 = Strongly Agree`)
+## 4. Stakeholder Usability & Satisfaction Survey (`PENDING`)
 
-| Evaluation Criterion | Admin Rating (1–5) | Vendor Rating (1–5) | Customer Rating (1–5) | Mean Score (Target >= 4.0) | Comments |
-| :--- | :---: | :---: | :---: | :---: | :--- |
-| Portal navigation & role clarity | `__` | `__` | `__` | `__` | |
-| Visual clarity & chart readability | `__` | `__` | `__` | `__` | |
-| Onboarding & approval workflow ease | `__` | `__` | `N/A` | `__` | |
-| Financial / COGS KPI trustworthiness | `__` | `__` | `N/A` | `__` | |
-| Perceived responsiveness & error clarity | `__` | `__` | `__` | `__` | |
+*Do not populate until actual external Admin, Vendor, and Customer participants evaluate the platform.*
+
+| Evaluation Criterion | Admin Rating (1–5) | Vendor Rating (1–5) | Customer Rating (1–5) | Mean Score (Target >= 4.0) | Status |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| Portal navigation & role clarity | `__` | `__` | `__` | `Pending` | `PENDING` |
+| Visual clarity & chart readability | `__` | `__` | `__` | `Pending` | `PENDING` |
+| Onboarding & approval workflow ease | `__` | `__` | `N/A` | `Pending` | `PENDING` |
+| Financial / COGS KPI trustworthiness | `__` | `__` | `N/A` | `Pending` | `PENDING` |
+| Perceived responsiveness & error clarity | `__` | `__` | `__` | `Pending` | `PENDING` |
 
 ---
 
 ## 5. Final Acceptance Calculation & Sign-Off Summary
 
-### Acceptance Scorecard (Complete Only After UAT Execution)
-- **Total Applicable Scenarios:** `16` (or `16 - N/A`)
-- **Passed (`PASS`):** `Pending`
-- **Partial (`PARTIAL`):** `Pending`
-- **Failed (`FAIL`):** `Pending`
-- **Open Critical/Major Defects (`P0` / `P1`):** `Pending`
-- **Computed Stakeholder Acceptance Rate (%):** `Pending (Target: >= 85.0%)`
+- **Developer Functional Pre-UAT Outcome:** **Conditional Pass with Open `P2` Defects (`DEF-UAT-01`, `DEF-UAT-02`)** — All `21` role-views across `ADMIN`, `VENDOR`, and `CUSTOMER` rendered with `0` exceptions; RBAC/tenant isolation, Executive BI filtering, COGS transparency, forecasting, recommendations, PDF/Excel exports, and PostgreSQL preservation passed cleanly.
+- **External Stakeholder Acceptance Rate (%):** **`PENDING` (`0%` fabricated; Target `>= 85.0%` upon stakeholder execution)**
 
 ### Formal Disposition
-- `[ ]` **ACCEPTED** (`>= 85%` pass rate and zero open `P0`/`P1` defects)
-- `[ ]` **CONDITIONALLY ACCEPTED** (Minor `P2`/`P3` polish items tracked)
-- `[ ]` **REJECTED** (Blocked by `P0`/`P1` defect or `< 85%` pass rate)
-- `[x]` **PENDING STAKEHOLDER TESTING**
+- `[ ]` **ACCEPTED** (`>= 85%` stakeholder pass rate, zero open `P0`/`P1` defects, and `DEF-UAT-01` resolved)
+- `[ ]` **CONDITIONALLY ACCEPTED**
+- `[ ]` **REJECTED**
+- `[x]` **PENDING EXTERNAL STAKEHOLDER UAT EXECUTION**
 
 | Stakeholder Role | Printed Name | Signature / Initials | Decision (`Approve / Hold`) | Date |
 | :--- | :--- | :--- | :--- | :--- |
 | **Business / Admin Stakeholder** | `____________________` | `____________` | `PENDING` | `____-__-__` |
 | **Vendor Operations Representative** | `____________________` | `____________` | `PENDING` | `____-__-__` |
+| **Customer Representative** | `____________________` | `____________` | `PENDING` | `____-__-__` |
 | **Technical Lead / Delivery Owner** | `____________________` | `____________` | `PENDING` | `____-__-__` |
