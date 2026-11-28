@@ -1,6 +1,6 @@
 # ShopSense / StockPilot — Multi-Vendor Retail Management, Analytics & Data Warehouse Platform
 > **Smarter Stock. Better Decisions.**  
-> *Milestones 1–4 Complete (Phases 1–5 Documentation, Executive BI, Performance Validation & UAT Ready)*
+> *Milestones 1–4 Complete — Core Implementation, Performance Validation, Documentation & Developer-Assisted Functional UAT (`DEF-UAT-01` Resolved; External Stakeholder UAT Pending)*
 
 ---
 
@@ -14,11 +14,11 @@
 | [User Guide](docs/user_guide.md) | Admin, Vendor & Customer | Login gate, vendor onboarding/approval, Executive BI, catalog, inventory, refunds, forecasting & recommendations |
 | [UAT Test Plan](docs/uat_test_plan.md) | QA & Stakeholders | 16 role-based UAT scenarios & >= 85% acceptance criteria (**External Stakeholder UAT: Pending**) |
 | [UAT Recording Template](docs/uat_recording_template.md) | QA & Stakeholders | Developer pre-UAT execution record + pending stakeholder evaluation & sign-off sheet |
-| [Step 12 UAT Execution Report](docs/uat_execution_report.md) | QA & Engineering | Developer functional UAT outcomes, RBAC/UI verification evidence & defects `DEF-UAT-01..03` |
+| [Step 12 UAT Execution Report](docs/uat_execution_report.md) | QA & Engineering | Developer functional UAT outcomes (`8 PASS / 7 PARTIAL / 1 BLOCKED / 0 FAIL`), `DEF-UAT-01` resolution & open UX items (`DEF-UAT-02`, `DEF-UAT-03`) |
 | [100K Benchmark Report](docs/benchmark_100k_report.md) | Performance / Eng | Milestone 4 Phase 1 vectorized 100K transaction dataset & analytics benchmark |
 | [Phase 4 Performance Report](docs/phase4_performance_report.md) | Performance / Eng | Integrated live PostgreSQL + isolated 100K relational DB baseline vs post-optimization telemetry |
 | [Step 11 Load Testing Report](docs/load_testing_report.md) | Performance / Ops | Progressive authenticated Locust load test (`50 -> 100` concurrent users, bottlenecks & saturation bounds) |
-| [Milestone 4 Final Report](docs/milestone4_final_report.md) | Leadership & Reviewers | End-to-end Milestone 4 deliverables, verified test/consistency evidence & release readiness summary |
+| [Milestone 4 Final Report](docs/milestone4_final_report.md) | Leadership & Reviewers | Consolidated Milestone 4 completion summary: Phases 1–5 results, Step 11 limits, Step 12 UAT, `DEF-UAT-01` fix, DB preservation & commit history |
 
 ---
 
@@ -347,8 +347,10 @@ python validate_consistency.py
 
 ### Verification Summary (Milestone 4 Complete)
 - **Full Repository Regression Suite:** **297 / 297 passed (`pytest tests/ -q`, verified on commit `d3629ec`)**
+- **Post-Remediation Targeted Security & UI Suite (`DEF-UAT-01`):** **93 / 93 passed (`pytest tests/test_stage7_auth_security.py tests/test_logout_refresh_token_security.py tests/test_vendor_onboarding_stage_a.py tests/test_vendor_onboarding_stage_b.py tests/test_executive_bi_dashboard.py tests/test_integration_status.py -q`, commit `513aa6c`)**
 - **Consistency Verification:** **12 / 12 passed (`100.0%` Consistency Score, `validate_consistency.py`)**
 - **100K Scale Validation:** Verified via isolated vectorized & relational benchmarks ([docs/benchmark_100k_report.md](docs/benchmark_100k_report.md), [docs/phase4_performance_report.md](docs/phase4_performance_report.md))
+- **Progressive Load & Functional UAT:** Reached `100` concurrent users (`50` stable, `0` failures, `P95 7,000 ms` single-worker ceiling; [docs/load_testing_report.md](docs/load_testing_report.md)) and completed Developer-Assisted UAT (`8 PASS`, `7 PARTIAL`, `1 BLOCKED`, `0 FAIL` after `DEF-UAT-01` fix; External Stakeholder UAT pending) — full consolidated summary in [docs/milestone4_final_report.md](docs/milestone4_final_report.md).
 
 ---
 
