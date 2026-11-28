@@ -850,3 +850,64 @@ def test_46_non_admin_cannot_access_etl_endpoints(client, db_session):
     assert resp.status_code == 403
     assert "administrative privileges required" in resp.json()["detail"].lower()
 
+
+def test_47_logout_rejects_access_token_as_refresh_token(client, db_session):
+    """
+    Regression test for DEF-UAT-01 backend guard: submitting an access token (or bogus
+    non-refresh token) to POST /auth/logout must fail cleanly with HTTP 400 and leave
+    the real refresh token revokable cleanly afterwards.
+    """
+    user = _create_user(db_session, email="logout_wrong_type@test.com", role=UserRole.CUSTOMER)
+    login_resp = client.post(
+        "/auth/login",
+        json={"email": "logout_wrong_type@test.com", "password": "SecurePass123!"},
+    )
+    assert login_resp.status_code == 200
+    tokens = login_resp.json()
+    headers = {"Authorization": f"Bearer {tokens['access_token']}", "X-Enforce-Auth": "true"}
+
+    # Submitting access_token instead of refresh_token must be rejected (never silent 200)
+    bad_logout = client.post(
+        "/auth/logout",
+        json={"refresh_token": tokens["access_token"]},
+        headers=headers,
+    )
+    assert bad_logout.status_code == 400
+    assert "refresh token" in bad_logout.json()["detail"].lower()
+
+    # Subsequent logout with the real refresh_token must still succeed cleanly
+    good_logout = client.post(
+        "/auth/logout",
+        json={"refresh_token": tokens["refresh_token"]},
+        headers=headers,
+    )
+    assert good_logout.status_code == 200
+    assert client.post("/auth/refresh", json={"refresh_token": tokens["refresh_token"]}).status_code == 401
+    assert client.get("/auth/me", headers=headers).status_code == 401
+
+
+def test_48_logout_rejects_another_users_refresh_token(client, db_session):
+    """Verify an authenticated user cannot revoke another user's refresh token via /auth/logout."""
+    _create_user(db_session, email="owner_logout@test.com", role=UserRole.CUSTOMER)
+    _create_user(db_session, email="attacker_logout@test.com", role=UserRole.CUSTOMER)
+
+    owner_tokens = client.post(
+        "/auth/login",
+        json={"email": "owner_logout@test.com", "password": "SecurePass123!"},
+    ).json()
+    attacker_tokens = client.post(
+        "/auth/login",
+        json={"email": "attacker_logout@test.com", "password": "SecurePass123!"},
+    ).json()
+
+    resp = client.post(
+        "/auth/logout",
+        json={"refresh_token": owner_tokens["refresh_token"]},
+        headers={"Authorization": f"Bearer {attacker_tokens['access_token']}", "X-Enforce-Auth": "true"},
+    )
+    assert resp.status_code == 403
+
+    # Owner's refresh token must remain unaffected/active
+    owner_refresh = client.post("/auth/refresh", json={"refresh_token": owner_tokens["refresh_token"]})
+    assert owner_refresh.status_code == 200
+

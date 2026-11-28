@@ -15,12 +15,13 @@ import logging
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 
+import jwt
 from fastapi import HTTPException, status
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.core.config import ACCESS_TOKEN_EXPIRE_MINUTES
+from app.core.config import ACCESS_TOKEN_EXPIRE_MINUTES, JWT_SECRET_KEY, JWT_ALGORITHM
 from app.core.security import (
     hash_password,
     verify_password,
@@ -368,22 +369,74 @@ class AuthService:
         )
 
     @staticmethod
-    def revoke_refresh_token(db: Session, refresh_token_str: str, access_token_jti: Optional[str] = None) -> bool:
+    def revoke_refresh_token(
+        db: Session,
+        refresh_token_str: str,
+        access_token_jti: Optional[str] = None,
+        expected_user_id: Optional[int] = None,
+    ) -> bool:
         """
-        Revoke a single refresh token (user logout), and optionally blacklist the accompanying access token JTI.
+        Validate and revoke a single refresh token (user logout), then blacklist
+        the accompanying access token JTI. Rejects non-refresh tokens (e.g. access
+        tokens) and tokens belonging to a different user rather than failing silently.
         """
-        if access_token_jti:
-            revoke_access_jti(access_token_jti)
+        if not refresh_token_str or not refresh_token_str.strip():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Refresh token is required for logout.",
+            )
 
         try:
-            decode_token(refresh_token_str, expected_type="refresh")
-        except HTTPException:
-            # Even if expired, try revoking by hash
-            pass
+            payload = decode_token(refresh_token_str, expected_type="refresh")
+        except HTTPException as exc:
+            # Allow revoking a cryptographically valid but expired refresh token by hash
+            if "expired" in (exc.detail or "").lower():
+                try:
+                    payload = jwt.decode(
+                        refresh_token_str,
+                        JWT_SECRET_KEY,
+                        algorithms=[JWT_ALGORITHM],
+                        options={"verify_exp": False},
+                    )
+                except jwt.InvalidTokenError as jwt_exc:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Invalid or malformed refresh token.",
+                    ) from jwt_exc
+                if payload.get("type") != "refresh":
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Invalid token type submitted for logout. Expected a valid refresh token.",
+                    )
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid token type submitted for logout. Expected a valid refresh token.",
+                ) from exc
+
+        if expected_user_id is not None and payload.get("sub") != str(expected_user_id):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot revoke a refresh token belonging to another user.",
+            )
 
         digest = hash_token(refresh_token_str)
         token_record = db.query(RefreshToken).filter(RefreshToken.token_hash == digest).first()
-        if token_record and not token_record.is_revoked:
+        if expected_user_id is not None and token_record and token_record.user_id != expected_user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot revoke a refresh token belonging to another user.",
+            )
+        if not token_record:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Refresh token session not found or already purged.",
+            )
+
+        if access_token_jti:
+            revoke_access_jti(access_token_jti)
+
+        if not token_record.is_revoked:
             token_record.is_revoked = True
             token_record.revoked_at = datetime.utcnow()
             db.commit()

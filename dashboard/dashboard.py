@@ -269,8 +269,14 @@ st.set_page_config(
 # ── Authentication Session State ──────────────────────────────────────────────
 if "auth_token" not in st.session_state:
     st.session_state["auth_token"] = None
+if "refresh_token" not in st.session_state:
+    st.session_state["refresh_token"] = None
 if "auth_user" not in st.session_state:
     st.session_state["auth_user"] = None
+if "auth_mode" not in st.session_state:
+    st.session_state["auth_mode"] = None
+if "auth_logout_error" not in st.session_state:
+    st.session_state["auth_logout_error"] = None
 
 auth_user = st.session_state.get("auth_user")
 
@@ -307,6 +313,8 @@ def _authenticate_dashboard_user(email: str, password: str) -> tuple[dict | None
     if resp and "access_token" in resp:
         return {
             "token": resp["access_token"],
+            "refresh_token": resp.get("refresh_token"),
+            "auth_mode": "api",
             "user": {
                 "id": resp["user_id"],
                 "email": resp["email"],
@@ -328,6 +336,8 @@ def _authenticate_dashboard_user(email: str, password: str) -> tuple[dict | None
             tokens = AuthService.issue_token_pair(fallback_db, user_obj)
             return {
                 "token": tokens.access_token,
+                "refresh_token": tokens.refresh_token,
+                "auth_mode": "local_db",
                 "user": {
                     "id": user_obj.id,
                     "email": user_obj.email,
@@ -340,6 +350,148 @@ def _authenticate_dashboard_user(email: str, password: str) -> tuple[dict | None
             fallback_db.close()
     except Exception as fallback_err:
         return None, _format_validation_error(fallback_err) if not err else f"{err} ({_format_validation_error(fallback_err)})"
+
+
+def _clear_dashboard_auth_session() -> None:
+    """Clear local Streamlit authentication and navigation session keys without leaving stale credentials."""
+    st.session_state["auth_token"] = None
+    st.session_state["refresh_token"] = None
+    st.session_state["auth_user"] = None
+    st.session_state["auth_mode"] = None
+    st.session_state["auth_logout_error"] = None
+    for key in (
+        "nav_radio",
+        "pending_nav_redirect",
+        "pending_confirm_action",
+        "vendor_gov_feedback",
+        "login_pass",
+    ):
+        st.session_state.pop(key, None)
+
+
+def _revoke_local_db_logout(
+    access_token: str | None,
+    refresh_token: str | None,
+    auth_user: dict | None,
+) -> tuple[bool, str | None]:
+    """Revoke issued tokens directly in DB when running an offline local_db session."""
+    try:
+        from app.database import SessionLocal
+        from app.services.auth.auth_service import AuthService
+        from app.core.security import decode_token, revoke_access_jti
+
+        access_jti = None
+        decoded_user_id = None
+        if access_token:
+            try:
+                decoded = decode_token(access_token)
+                access_jti = decoded.get("jti")
+                sub = decoded.get("sub")
+                decoded_user_id = int(sub) if sub is not None else None
+            except Exception:
+                pass
+
+        user_id = decoded_user_id or (auth_user.get("id") if isinstance(auth_user, dict) else None)
+        db = SessionLocal()
+        try:
+            if refresh_token:
+                AuthService.revoke_refresh_token(
+                    db,
+                    refresh_token,
+                    access_token_jti=access_jti,
+                    expected_user_id=user_id,
+                )
+            elif user_id is not None:
+                if access_jti:
+                    revoke_access_jti(access_jti)
+                AuthService.revoke_all_sessions(db, int(user_id))
+            else:
+                return False, "Logout failed: missing session identifiers for server-side token revocation."
+            return True, None
+        finally:
+            db.close()
+    except Exception as exc:
+        return False, f"Logout failed: {_format_validation_error(exc)}"
+
+
+def _fail_dashboard_logout(msg: str) -> tuple[bool, str]:
+    """Record server logout failure without falsely clearing active local tokens."""
+    st.session_state["auth_logout_error"] = msg
+    return False, msg
+
+
+def _recover_expired_access_logout(refresh_token: str) -> tuple[bool, str | None]:
+    """Refresh an expired access token and revoke the resulting session before clearing local state."""
+    ref_res, ref_err = api_post("/auth/refresh", {"refresh_token": refresh_token})
+    if ref_res and ref_res.get("access_token") and ref_res.get("refresh_token"):
+        st.session_state["auth_token"] = ref_res["access_token"]
+        st.session_state["refresh_token"] = ref_res["refresh_token"]
+        _, err2 = api_post("/auth/logout", {"refresh_token": ref_res["refresh_token"]})
+        if err2 is None:
+            _clear_dashboard_auth_session()
+            return True, None
+        return _fail_dashboard_logout(
+            f"Logout failed after token refresh ({err2}). Your session remains active; please retry."
+        )
+
+    if ref_err and ref_err.startswith(("HTTP 401:", "HTTP 403:")):
+        # Ensure any still-active access token is also terminated before clearing local state
+        _, all_err = api_post("/auth/logout-all", {})
+        if all_err is None or all_err.startswith(("HTTP 401:", "HTTP 403:")):
+            _clear_dashboard_auth_session()
+            return True, None
+        return _fail_dashboard_logout(
+            f"Logout failed ({all_err}). Your session was kept active until server revocation succeeds."
+        )
+
+    fail_detail = ref_err or "unable to refresh expired access token"
+    return _fail_dashboard_logout(
+        f"Logout failed ({fail_detail}). Server-side refresh token was not revoked; please retry."
+    )
+
+
+def _perform_dashboard_logout() -> tuple[bool, str | None]:
+    """
+    Revoke server-side tokens cleanly before clearing local Streamlit session state.
+    Sends the stored refresh_token to POST /auth/logout (never the access_token) and
+    refuses to leave the user falsely logged out if server revocation fails.
+    """
+    st.session_state["auth_logout_error"] = None
+    access_token = st.session_state.get("auth_token")
+    refresh_token = st.session_state.get("refresh_token")
+    auth_user = st.session_state.get("auth_user")
+    auth_mode = st.session_state.get("auth_mode")
+
+    if auth_mode == "local_db":
+        ok, db_err = _revoke_local_db_logout(access_token, refresh_token, auth_user)
+        if not ok:
+            return _fail_dashboard_logout(db_err or "Logout failed while revoking local session.")
+        _clear_dashboard_auth_session()
+        return True, None
+
+    if refresh_token:
+        _, err = api_post("/auth/logout", {"refresh_token": refresh_token})
+        if err is None:
+            _clear_dashboard_auth_session()
+            return True, None
+        if err.startswith("HTTP 401:"):
+            return _recover_expired_access_logout(refresh_token)
+        return _fail_dashboard_logout(
+            f"Logout failed ({err}). Your session was kept active so server tokens are not left unrevoked."
+        )
+
+    if access_token:
+        # Legacy/partial session without refresh_token: never submit access_token to /auth/logout
+        _, err = api_post("/auth/logout-all", {})
+        if err is None or err.startswith(("HTTP 401:", "HTTP 403:")):
+            _clear_dashboard_auth_session()
+            return True, None
+        return _fail_dashboard_logout(
+            f"Logout failed ({err}). Your session was kept active until server revocation succeeds."
+        )
+
+    _clear_dashboard_auth_session()
+    return True, None
 
 
 def _register_customer_account(email: str, password: str) -> tuple[dict | None, str | None]:
@@ -427,7 +579,10 @@ def render_login_page():
                         auth_res, auth_err = _authenticate_dashboard_user(login_email.strip(), login_pass)
                         if auth_res:
                             st.session_state["auth_token"] = auth_res["token"]
+                            st.session_state["refresh_token"] = auth_res.get("refresh_token")
+                            st.session_state["auth_mode"] = auth_res.get("auth_mode") or "api"
                             st.session_state["auth_user"] = auth_res["user"]
+                            st.session_state["auth_logout_error"] = None
                             role_val = auth_res["user"].get("role", "CUSTOMER")
                             st.session_state["pending_nav_redirect"] = (
                                 "🛍️ Customer Catalog" if role_val == "CUSTOMER" else "📊 Dashboard"
@@ -629,14 +784,12 @@ with st.sidebar:
         st.caption(f"Customer ID: `{auth_user.get('customer_id')}`")
 
     if st.button("🚪 Log Out", use_container_width=True, key="auth_logout_btn"):
-        token = st.session_state.get("auth_token")
-        if token:
-            api_post("/auth/logout", {"refresh_token": token})
-        st.session_state["auth_token"] = None
-        st.session_state["auth_user"] = None
-        st.session_state.pop("nav_radio", None)
-        st.session_state.pop("pending_nav_redirect", None)
-        st.rerun()
+        logout_ok, _ = _perform_dashboard_logout()
+        if logout_ok:
+            st.rerun()
+
+    if st.session_state.get("auth_logout_error"):
+        st.error(st.session_state["auth_logout_error"])
 
     st.caption("ShopSense v2.0 • Enterprise Edition")
 

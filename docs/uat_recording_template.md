@@ -13,7 +13,7 @@
 | **UAT Cycle ID** | `UAT-M4-STEP12` |
 | **Application Version** | `ShopSense 1.0.0` (API metadata `1.0.0`; Streamlit sidebar caption `v2.0` — see `DEF-UAT-03`) |
 | **Environment Tested (Dev Pre-UAT)** | `[x] Local Host` (`http://127.0.0.1:8501` UI / `http://127.0.0.1:8000` API / local `PostgreSQL`) |
-| **Developer Pre-UAT Date** | `2026-11-27` / `2026-11-28` |
+| **Developer Pre-UAT Date** | `2026-11-27` / `2026-11-28` *(DEF-UAT-01 retested `2026-11-28`)* |
 | **Stakeholder UAT Status** | **`PENDING EXTERNAL STAKEHOLDER WALKTHROUGH`** |
 
 ### Accounts Used in Developer Pre-UAT (Existing Accounts — Zero DB Polluting)
@@ -28,7 +28,7 @@
 
 ## 2A. Developer-Assisted Functional Pre-UAT Execution Log (Live PostgreSQL Preserved)
 
-Summary across 16 scenarios in [uat_test_plan.md](uat_test_plan.md): **7 `PASS`**, **7 `PARTIAL` (non-destructive scope enforced — mutating commits verified in isolated pytest or deferred to protect live DB; survey pending)**, **1 `BLOCKED` (unowned pending vendor credentials)**, **1 `FAIL` (`DEF-UAT-01` UI refresh-token logout gap)**.
+Summary across 16 scenarios in [uat_test_plan.md](uat_test_plan.md): **8 `PASS`** (including `UAT-15` retested after `DEF-UAT-01` remediation), **7 `PARTIAL` (non-destructive scope enforced — mutating commits verified in isolated pytest or deferred to protect live DB; survey pending)**, **1 `BLOCKED` (unowned pending vendor credentials)**, **0 `FAIL`**.
 
 | ID | Dev Functional Status | Method & Scope | Observed Evidence & Non-Destructive Guard Notes |
 | :--- | :---: | :--- | :--- |
@@ -46,7 +46,7 @@ Summary across 16 scenarios in [uat_test_plan.md](uat_test_plan.md): **7 `PASS`*
 | **UAT-12** | `PASS` | AppTest (`Admin`) | `⚡ ETL & Data Warehouse` renders `10` KPI cards cleanly across Batch Monitoring (`0` uploaded batches), Quarantine, Data Quality, and Daily Sales Mart (`547` mart rows verified intact). |
 | **UAT-13** | `PARTIAL` | AppTest (`Customer #61`) | Customer sign-in lands on `🛍️ Customer Catalog` with strictly `3` Customer views (`Catalog`, `Recommendations`, `Transactions`). Keyword search `"Smart"` filters catalog cards cleanly (`0` exceptions). New registration submit skipped to keep `users=8` / `customers=61` intact. |
 | **UAT-14** | `PASS` | AppTest + HTTP (`Customer #61`) | `🎯 Recommendations` renders Hybrid (`Hit Rate@5 92.7%`, `NDCG@5 0.853`) and CF metrics (`0` exceptions); `💳 Transactions` shows `6` customer orders (`₹14,334.97`, `₹2,389.16` AOV). Live API enforces **`403`** on `/recommend/1` & `/analytics/customers/clv/1` vs `200` on `61`. |
-| **UAT-15** | `FAIL` | Browser + AppTest + HTTP | `🩺 System Health` renders `5/7 Healthy`, `2 Degraded` (fallback models) accurately. Direct API `POST /auth/logout` with `refresh_token` returns `401` on `/auth/refresh` & `/auth/me`. **HOWEVER (`DEF-UAT-01`):** Clicking UI `🚪 Log Out` sends `access_token` instead of `refresh_token` (because `_authenticate_dashboard_user()` discards `refresh_token`), leaving the DB refresh token unrevoked (`200` on `/auth/refresh`). |
+| **UAT-15** | `PASS` *(Retested `2026-11-28`)* | Browser + AppTest + HTTP + PG | `🩺 System Health` renders `5/7 Healthy`, `2 Degraded` accurately. **Retest after `DEF-UAT-01` fix:** Login stores real `refresh_token` in session state without UI/log exposure; clicking `🚪 Log Out` posts `refresh_token` to `POST /auth/logout` (backend now rejects `access_token` with `400`), live PostgreSQL `refresh_tokens` transitions to `is_revoked=True` (verified live on Chrome & `AppTest` sessions), local session state clears cleanly, and post-logout `/auth/refresh` & `/auth/me` & protected routes reject `401`. Server logout errors preserve local session and display clear alert. |
 | **UAT-16** | `PARTIAL` | Browser + AppTest | Midnight Navy / Electric Violet styling, hero cards, Plotly charts, and navigation verified across all `21` role-views (`0` runtime exceptions). **Issues (`DEF-UAT-02`, `DEF-UAT-03`):** cold initial `📊 Dashboard` load can take 15–30s sequentially (`DEF-UAT-02`); sidebar displays `v2.0` vs API `1.0.0` (`DEF-UAT-03`). **Stakeholder survey remains `PENDING`.** |
 
 ---
@@ -63,7 +63,7 @@ Summary across 16 scenarios in [uat_test_plan.md](uat_test_plan.md): **7 `PASS`*
 
 | Defect ID | Linked Scenario | Severity | Observed Issue & Reproduction | Remediation Recommendation | Status |
 | :--- | :--- | :---: | :--- | :--- | :---: |
-| **`DEF-UAT-01`** | `UAT-15` | **P2 (Medium — Auth Session Hygiene)** | `dashboard/dashboard.py` (`_authenticate_dashboard_user`) stores `access_token` only and drops `refresh_token`. Clicking `🚪 Log Out` sends `{"refresh_token": access_token}` to `POST /auth/logout`, blacklisting the access token JTI (`401`) while leaving the server `refresh_tokens` row unrevoked (`200` on `/auth/refresh`). | Store `resp["refresh_token"]` in `st.session_state["refresh_token"]` upon UI login and pass it cleanly to `POST /auth/logout` on logout (or invoke `/auth/logout-all`). | **Open (Before Final Prod Rollout)** |
+| **`DEF-UAT-01`** | `UAT-15` | **P2 (Medium — Auth Session Hygiene)** | `dashboard/dashboard.py` (`_authenticate_dashboard_user`) stored `access_token` only and dropped `refresh_token`, causing `🚪 Log Out` to submit `access_token` to `/auth/logout` without revoking server `refresh_tokens`. Backend also previously ignored non-refresh token types on `/auth/logout`. | Persisted `refresh_token` in `st.session_state`, updated `_perform_dashboard_logout()` to submit real `refresh_token` to `/auth/logout`, hardened server `AuthService.revoke_refresh_token()` (`400`/`403`/`404` checks), added expired-access rotation recovery, and blocked false local session wipe on server failure (`tests/test_logout_refresh_token_security.py`, `tests/test_stage7_auth_security.py` `test_47`/`test_48`, live `:8501`/`:8000`/PG verified). | **Resolved & Verified (`2026-11-28`)** |
 | **`DEF-UAT-02`** | `UAT-16` | **P2 (Medium — Initial Page Latency)** | Cold opening of `📊 Dashboard` (`selected_page == "📊 Dashboard"`) executes 10+ synchronous cross-module API/analytic calls sequentially (hitting ~15–30s cold load during automated `AppTest`). | Lazy-load or consolidate Dashboard summary KPIs into `/analytics/executive/summary` or `@st.cache_data(ttl=60)` slices to eliminate redundant cold sequential fetches. | **Open** |
 | **`DEF-UAT-03`** | `UAT-16`, `README` | **P3 (Low / Cosmetic)** | Sidebar footer renders `ShopSense v2.0 • Enterprise Edition` while `backend/config.py`, `/health/live`, and `/admin/overview` report `1.0.0`. Streamlit logs emit `use_container_width` deprecation warnings. *(Also aligned UI `Sign Out` wording to `🚪 Log Out` in docs.)* | Standardize UI footer version with `VERSION` (`1.0.0`) or `v2.0` release tag and migrate `use_container_width=True` -> `width="stretch"`. | **Open** |
 
@@ -85,11 +85,11 @@ Summary across 16 scenarios in [uat_test_plan.md](uat_test_plan.md): **7 `PASS`*
 
 ## 5. Final Acceptance Calculation & Sign-Off Summary
 
-- **Developer Functional Pre-UAT Outcome:** **Conditional Pass with Open `P2` Defects (`DEF-UAT-01`, `DEF-UAT-02`)** — All `21` role-views across `ADMIN`, `VENDOR`, and `CUSTOMER` rendered with `0` exceptions; RBAC/tenant isolation, Executive BI filtering, COGS transparency, forecasting, recommendations, PDF/Excel exports, and PostgreSQL preservation passed cleanly.
+- **Developer Functional Pre-UAT Outcome:** **Pass (Non-Destructive Scope; Non-Blocking Open P2/P3 UX Items `DEF-UAT-02`, `DEF-UAT-03`)** — `DEF-UAT-01` resolved & verified live; all `21` role-views across `ADMIN`, `VENDOR`, and `CUSTOMER` rendered with `0` exceptions; RBAC/tenant isolation, Executive BI filtering, COGS transparency, forecasting, recommendations, PDF/Excel exports, logout token revocation, and PostgreSQL preservation passed cleanly.
 - **External Stakeholder Acceptance Rate (%):** **`PENDING` (`0%` fabricated; Target `>= 85.0%` upon stakeholder execution)**
 
 ### Formal Disposition
-- `[ ]` **ACCEPTED** (`>= 85%` stakeholder pass rate, zero open `P0`/`P1` defects, and `DEF-UAT-01` resolved)
+- `[ ]` **ACCEPTED** (`>= 85%` stakeholder pass rate, zero open `P0`/`P1` defects)
 - `[ ]` **CONDITIONALLY ACCEPTED**
 - `[ ]` **REJECTED**
 - `[x]` **PENDING EXTERNAL STAKEHOLDER UAT EXECUTION**

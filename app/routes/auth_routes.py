@@ -125,7 +125,12 @@ def logout(
         except Exception:
             pass
 
-    AuthService.revoke_refresh_token(db, payload.refresh_token, access_token_jti=access_jti)
+    AuthService.revoke_refresh_token(
+        db,
+        payload.refresh_token,
+        access_token_jti=access_jti,
+        expected_user_id=current_user.id,
+    )
     return MessageResponse(message="Successfully logged out of current session.")
 
 

@@ -48,7 +48,7 @@
 ## 3. Open Items & Honest Operational Disclosures
 
 1. **Stakeholder User Acceptance Testing (UAT): PENDING EXTERNAL STAKEHOLDER SIGN-OFF**
-   - Developer-assisted functional verification ([uat_execution_report.md](uat_execution_report.md)) completed cleanly (`7 PASS`, `7 PARTIAL` read/guard-verified without live DB mutations, `1 BLOCKED` unowned pending credential, `1 FAIL` `DEF-UAT-01` UI refresh-token logout gap alongside `DEF-UAT-02` / `DEF-UAT-03`). External Admin/Vendor/Customer walkthroughs & >= 85% acceptance sign-off remain **PENDING** in [uat_recording_template.md](uat_recording_template.md).
+   - Developer-assisted functional verification ([uat_execution_report.md](uat_execution_report.md)) completed cleanly (`8 PASS`, `7 PARTIAL` read/guard-verified without live DB mutations, `1 BLOCKED` unowned pending credential, `0 FAIL` after `DEF-UAT-01` logout refresh-token remediation & live retest; non-blocking UX/cosmetic `DEF-UAT-02` / `DEF-UAT-03` remain open). External Admin/Vendor/Customer walkthroughs & `>= 85%` acceptance sign-off remain **PENDING** in [uat_recording_template.md](uat_recording_template.md).
 2. **Docker Compose Container Execution Status:**
    - Local native execution (`PostgreSQL` + `MLflow` + `Uvicorn` + `Streamlit`) and GitHub Actions CI definition (`.github/workflows/ci.yml`) are verified/audited. Full `docker compose up` runtime execution was not performed on this Windows host during Phase 5 and should be smoke-tested on the target Docker host prior to container-based rollout (note: ensure both `JWT_SECRET_KEY` and `SECRET_KEY` are mapped identically in Compose `.env`).
 3. **Model Fallback States:**
