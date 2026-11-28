@@ -7,6 +7,7 @@ Start the server:
 Interactive API docs: http://127.0.0.1:8000/docs
 """
 
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from fastapi import Depends, FastAPI, HTTPException, status
 from sqlalchemy.orm import Session
@@ -58,11 +59,43 @@ openapi_tags = [
     },
 ]
 
+def startup_event():
+    """Start APScheduler background scheduler on FastAPI startup if enabled."""
+    import os
+    import sys
+
+    if os.getenv("DISABLE_BACKGROUND_SCHEDULER", "false").lower() in ("1", "true", "yes"):
+        return
+    if os.getenv("ENABLE_AUTO_SCHEDULER", "true").lower() in ("1", "true", "yes"):
+        if "pytest" not in sys.modules:
+            from app.scheduler import start_scheduler
+
+            start_scheduler()
+
+
+def shutdown_event():
+    """Safely shut down APScheduler background scheduler on FastAPI shutdown."""
+    from app.scheduler import stop_scheduler
+
+    stop_scheduler()
+
+
+@asynccontextmanager
+async def lifespan(app_instance: FastAPI):
+    """Manage APScheduler background lifecycle on FastAPI startup and shutdown."""
+    startup_event()
+    try:
+        yield
+    finally:
+        shutdown_event()
+
+
 app = FastAPI(
     title="ShopSense Analytics Platform",
     description="Production Retail Marketplace Analytics Platform",
     version=settings.version if settings.version == "1.0.0" else "1.0.0",
     openapi_tags=openapi_tags,
+    lifespan=lifespan,
 )
 
 # ── Register routers ────────────────────────────────────────────────────────
@@ -137,26 +170,6 @@ def readiness_probe(db: Session = Depends(get_db)):
         "database": db_check["status"],
         "timestamp": db_check["last_checked"],
     }
-
-
-@app.on_event("startup")
-def startup_event():
-    """Starts APScheduler background scheduler on FastAPI startup if enabled."""
-    import os
-    import sys
-    if os.getenv("DISABLE_BACKGROUND_SCHEDULER", "false").lower() in ("1", "true", "yes"):
-        return
-    if os.getenv("ENABLE_AUTO_SCHEDULER", "true").lower() in ("1", "true", "yes"):
-        if "pytest" not in sys.modules:
-            from app.scheduler import start_scheduler
-            start_scheduler()
-
-
-@app.on_event("shutdown")
-def shutdown_event():
-    """Safely shuts down APScheduler background scheduler on FastAPI shutdown."""
-    from app.scheduler import stop_scheduler
-    stop_scheduler()
 
 
 if __name__ == "__main__":

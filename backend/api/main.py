@@ -13,9 +13,9 @@ Registers:
   - Admin API (system governance & audits)
 """
 
-from app.main import app, startup_event, shutdown_event
+from app.main import app, lifespan, startup_event, shutdown_event
 
-__all__ = ["app", "startup_event", "shutdown_event"]
+__all__ = ["app", "lifespan", "startup_event", "shutdown_event"]
 
 if __name__ == "__main__":
     import uvicorn

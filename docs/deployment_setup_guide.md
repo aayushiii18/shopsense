@@ -3,9 +3,9 @@
 This guide documents exact, reproducible setup and deployment procedures derived from the current ShopSense repository configuration.
 
 > **Verification Transparency Note:**
-> - **Verified directly in Phase 4 & 5:** Native host setup with Python `3.10.6`, PostgreSQL, Uvicorn (`127.0.0.1:8000`), Streamlit (`127.0.0.1:8501`), MLflow tracking (`127.0.0.1:5000`), schema migrations, `bootstrap_admin.py`, `validate_consistency.py`, and full `pytest` regression (`297 passed`).
+> - **Verified directly in Phase 4, Phase 5 & Final Closure:** Native host setup with Python `3.10.6`, PostgreSQL, Uvicorn (`127.0.0.1:8000`), Streamlit (`127.0.0.1:8501`), MLflow tracking (`127.0.0.1:5000`), schema migrations, `bootstrap_admin.py`, `validate_consistency.py`, and full `pytest` regression (`305 passed, 0 failed`).
 > - **Automated CI definition:** `.github/workflows/ci.yml` defines PostgreSQL 15 + Python 3.10 initialization, migrations, consistency validation, `pytest`, and Streamlit `AppTest` verification.
-> - **Docker Compose status:** Container files (`docker-compose.yml`, `Dockerfile.backend`, `Dockerfile.dashboard`, `docker_entrypoint.py`, `docker-entrypoint.sh`) exist in the repository from Stage 8, **but full `docker compose up` container runtime execution was not executed on this Windows host during Phase 5**. Treat Docker deployment instructions as pre-configured topology requiring a live `docker compose up` smoke check in your target Docker environment.
+> - **Docker Compose status — `NOT VERIFIED (ENVIRONMENT LIMITATION)`:** Container files (`docker-compose.yml`, `Dockerfile.backend`, `Dockerfile.dashboard`, `docker_entrypoint.py`, `docker-entrypoint.sh`) exist in the repository from Stage 8, **but Docker CLI / Docker Desktop is not installed on this Windows host (`DOCKER_NOT_INSTALLED`), preventing live `docker compose up` runtime verification**. Treat Docker deployment instructions as pre-configured topology requiring a live `docker compose up` smoke check in your target Docker environment.
 
 ---
 
@@ -171,7 +171,7 @@ python validate_consistency.py
 
 ---
 
-## 7. Docker Compose Setup (Reference Topology — Unverified on Host in Phase 5)
+## 7. Docker Compose Setup (Reference Topology — `NOT VERIFIED (ENVIRONMENT LIMITATION)`)
 
 `docker-compose.yml` defines four networked services (`shopsense-network`) with persistent named volumes (`shopsense-postgres-data`, `shopsense-mlflow-data`):
 
@@ -199,7 +199,7 @@ docker compose logs -f backend
 
 ### Safe Shutdown
 1. Stop Streamlit (`Ctrl+C` in Terminal 3).
-2. Stop FastAPI (`Ctrl+C` in Terminal 2) — triggers `shutdown_event()` which calls `stop_scheduler()` and cleanly releases/removes `stockpilot_scheduler.lock`.
+2. Stop FastAPI (`Ctrl+C` in Terminal 2) — triggers the FastAPI `lifespan` shutdown (`shutdown_event()`), which calls `stop_scheduler()` and cleanly releases/removes `stockpilot_scheduler.lock`.
 3. Stop MLflow (`Ctrl+C` in Terminal 1).
 *(Docker equivalent: `docker compose down` preserves `postgres_data` and `mlflow_data`; avoid `-v` unless intentionally destroying volumes.)*
 

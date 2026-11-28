@@ -336,7 +336,7 @@ def _render_trends_section(trends_payload: Dict[str, Any], granularity: str) -> 
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         )
         style_chart(fig_rev, height=340)
-        st.plotly_chart(fig_rev, use_container_width=True)
+        st.plotly_chart(fig_rev, width="stretch")
 
     with col_r:
         fig_ord = go.Figure()
@@ -369,7 +369,7 @@ def _render_trends_section(trends_payload: Dict[str, Any], granularity: str) -> 
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         )
         style_chart(fig_ord, height=340)
-        st.plotly_chart(fig_ord, use_container_width=True)
+        st.plotly_chart(fig_ord, width="stretch")
 
 
 def _render_vendors_and_products_section(
@@ -401,7 +401,7 @@ def _render_vendors_and_products_section(
             fig_v.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
             style_chart(fig_v, height=330, show_legend=False)
             fig_v.update_layout(coloraxis_showscale=False)
-            st.plotly_chart(fig_v, use_container_width=True)
+            st.plotly_chart(fig_v, width="stretch")
         else:
             st.info("No vendor sales activity in selected date window.")
 
@@ -434,7 +434,7 @@ def _render_vendors_and_products_section(
                     "order_count": "Orders",
                 }
             )
-            st.dataframe(disp_v, use_container_width=True, hide_index=True)
+            st.dataframe(disp_v, width="stretch", hide_index=True)
         else:
             st.info("Vendor leaderboard is empty for the current filters.")
 
@@ -455,7 +455,7 @@ def _render_vendors_and_products_section(
                 hover_data={"units_sold": True, "category": True, "stock_status": True},
             )
             style_chart(fig_p, height=330, show_legend=False)
-            st.plotly_chart(fig_p, use_container_width=True)
+            st.plotly_chart(fig_p, width="stretch")
         else:
             st.info("No product transactions recorded in the selected scope.")
 
@@ -485,7 +485,7 @@ def _render_vendors_and_products_section(
                     "Stock": int(p["current_stock"]),
                     "Stock Status": p["stock_status"],
                 })
-            st.dataframe(pd.DataFrame(formatted_rows), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(formatted_rows), width="stretch", hide_index=True)
         else:
             st.info("No product performance rows available for display.")
 
@@ -518,7 +518,7 @@ def _render_inventory_health_section(inv: Dict[str, Any]) -> None:
                     },
                 )
                 style_chart(fig_inv, height=290)
-                st.plotly_chart(fig_inv, use_container_width=True)
+                st.plotly_chart(fig_inv, width="stretch")
             else:
                 st.info("No active inventory quantities recorded.")
         else:

@@ -106,40 +106,24 @@ def _build_cf_similarity_matrix(df_ix: pd.DataFrame, all_product_ids: List[int])
     return cf_dict, pop_scores
 
 
-def get_hybrid_recommendations(
-    db: Session,
-    customer_id: int,
-    top_n: int = 5,
-    alpha: float = 0.65,
-    exclude_product_id: Optional[int] = None,
-    exclude_interacted: bool = False,
-) -> Dict[str, Any]:
+def _prepare_hybrid_context(db: Session) -> Dict[str, Any]:
     """
-    Generates personalized hybrid recommendations combining Collaborative & Content-Based signals.
+    Load operational catalog metadata, stock levels, interactions, and similarity
+    matrices once so batch recommendation callers reuse them without N+1 DB/TF-IDF work.
     """
-    customer = db.query(Customer).filter(Customer.customer_id == customer_id).first()
-    if not customer:
-        raise ValueError(f"Customer with id={customer_id} not found.")
-
-    # Restrict recommendations strictly to approved / operational vendors
     operational_vendors = {
         v.id: v.name
         for v in db.query(Vendor).filter(Vendor.status.in_(OPERATIONAL_VENDOR_STATUSES)).all()
     }
+    customers_by_id = {c.customer_id: c.name for c in db.query(Customer).all()}
 
-    # Fetch catalog and stock levels
     catalog = normalize_product_catalog(db)
     prod_meta = [p for p in catalog.get("products", []) if p.get("vendor_id") in operational_vendors]
     products_by_id = {p["product_id"]: p for p in prod_meta}
     all_product_ids = list(products_by_id.keys())
 
-    # Inventory stock check
-    inv_map = {
-        inv.product_id: inv.current_stock
-        for inv in db.query(Inventory).all()
-    }
+    inv_map = {inv.product_id: inv.current_stock for inv in db.query(Inventory).all()}
 
-    # Fetch customer interactions
     interactions = db.query(CustomerInteraction).all()
     df_ix = pd.DataFrame([
         {
@@ -150,17 +134,59 @@ def get_hybrid_recommendations(
         for i in interactions if i.customer_id is not None
     ])
 
-    user_ix = df_ix[df_ix["customer_id"] == customer_id] if not df_ix.empty else pd.DataFrame()
-    user_interacted_pids = set(user_ix["product_id"].unique()) if not user_ix.empty else set()
+    user_ix_map: Dict[int, List[Tuple[int, float]]] = {}
+    if not df_ix.empty:
+        for cid, pid, w in zip(df_ix["customer_id"], df_ix["product_id"], df_ix["interaction_weight"]):
+            user_ix_map.setdefault(int(cid), []).append((int(pid), float(w)))
 
-    # Build similarity models
     cb_sim, id_to_idx, idx_to_id = _build_content_similarity_matrix(prod_meta)
     cf_sim, pop_scores = _build_cf_similarity_matrix(df_ix, all_product_ids)
 
-    vendors = operational_vendors
+    return {
+        "customers_by_id": customers_by_id,
+        "vendors": operational_vendors,
+        "products_by_id": products_by_id,
+        "all_product_ids": all_product_ids,
+        "inv_map": inv_map,
+        "user_ix_map": user_ix_map,
+        "cb_sim": cb_sim,
+        "id_to_idx": id_to_idx,
+        "idx_to_id": idx_to_id,
+        "cf_sim": cf_sim,
+        "pop_scores": pop_scores,
+    }
+
+
+def get_hybrid_recommendations(
+    db: Session,
+    customer_id: int,
+    top_n: int = 5,
+    alpha: float = 0.65,
+    exclude_product_id: Optional[int] = None,
+    exclude_interacted: bool = False,
+    prepared: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Generates personalized hybrid recommendations combining Collaborative & Content-Based signals.
+    """
+    ctx = prepared if prepared is not None else _prepare_hybrid_context(db)
+    customer_name = ctx["customers_by_id"].get(customer_id)
+    if customer_name is None:
+        raise ValueError(f"Customer with id={customer_id} not found.")
+
+    vendors = ctx["vendors"]
+    products_by_id = ctx["products_by_id"]
+    all_product_ids = ctx["all_product_ids"]
+    inv_map = ctx["inv_map"]
+    user_interactions = ctx["user_ix_map"].get(customer_id, [])
+    user_interacted_pids = {u_pid for u_pid, _ in user_interactions}
+    cb_sim = ctx["cb_sim"]
+    id_to_idx = ctx["id_to_idx"]
+    cf_sim = ctx["cf_sim"]
+    pop_scores = ctx["pop_scores"]
 
     # Check for cold start
-    is_cold_start = user_ix.empty or len(user_interacted_pids) == 0
+    is_cold_start = len(user_interactions) == 0
 
     scored_candidates: List[Dict[str, Any]] = []
 
@@ -194,10 +220,7 @@ def get_hybrid_recommendations(
             top_affinity_source = None
             max_cf_sim = 0.0
 
-            for _, row in user_ix.iterrows():
-                u_pid = int(row["product_id"])
-                u_weight = float(row["interaction_weight"])
-
+            for u_pid, u_weight in user_interactions:
                 # CF similarity
                 cf_sim_val = cf_sim.get(u_pid, {}).get(pid, 0.0)
                 cf_score += cf_sim_val * u_weight
@@ -248,7 +271,7 @@ def get_hybrid_recommendations(
 
     return {
         "customer_id": customer_id,
-        "customer_name": customer.name,
+        "customer_name": customer_name,
         "is_personalized": not is_cold_start,
         "alpha_weight_cf": alpha,
         "beta_weight_content": round(1.0 - alpha, 2),

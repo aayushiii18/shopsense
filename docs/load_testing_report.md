@@ -3,6 +3,7 @@
 **Executed:** 2026-11-27 18:15:11 UTC  
 **Target Stack:** `http://127.0.0.1:8000` (Single-worker Uvicorn ASGI -> local PostgreSQL)  
 **Peak Concurrent Users Reached:** `100` (`50` stable within latency/error gates; `1,074` total requests, `0` failures, `56.63s` cumulative active load)  
+**500-User Target Status:** **`NOT ACHIEVED (WITH REASON)`** — Halted safely by the `P95 > 5,000 ms` guardrail at `100` concurrent users (`P95 = 7,000 ms`) on this resource-constrained single-worker Windows host (`7.8 GB` RAM total, `~982.6 MB`–`1.14 GB` available RAM); multi-worker deployment & external ML caching required before forcing `200–500` users.  
 **Load Profile:** Multi-role authenticated Locust workload (`StockPilotAnalyticsUser` ADMIN w=5, `VendorOperationsUser` w=2, `CustomerShopperUser` w=3), spawn rate `25 users/s`, think time `0.35s–1.15s`, strictly read-only GET queries (`<4%` `/health/ready` weight).
 
 ---

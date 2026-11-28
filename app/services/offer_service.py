@@ -33,7 +33,7 @@ from app.models.inventory import Inventory
 from app.models.transaction import Transaction
 from app.services.churn_service import train_and_evaluate_churn_model
 from app.services.clv_service import compute_predictive_clv
-from app.services.hybrid_recommender import get_hybrid_recommendations
+from app.services.hybrid_recommender import _prepare_hybrid_context, get_hybrid_recommendations
 
 
 # Category-Level Benchmark Elasticity Assumptions (|epsilon| >= 0)
@@ -131,8 +131,9 @@ def generate_personalized_offer_strategy(db: Session, limit: int = 20) -> Dict[s
     Generates personalized offers targeting key customer segments based on
     CLV tiers, churn probabilities, and Hybrid recommendations.
     """
-    clv_data = compute_predictive_clv(db)
     churn_data = train_and_evaluate_churn_model(db)
+    clv_data = compute_predictive_clv(db, precomputed_churn=churn_data)
+    hybrid_ctx = _prepare_hybrid_context(db)
 
     clv_customers = {c["customer_id"]: c for c in clv_data.get("customers", [])}
     churn_customers = {c["customer_id"]: c for c in churn_data.get("customers", [])}
@@ -165,8 +166,8 @@ def generate_personalized_offer_strategy(db: Session, limit: int = 20) -> Dict[s
 
         segment_counts[segment] = segment_counts.get(segment, 0) + 1
 
-        # Fetch top hybrid recommendation for customer
-        recs = get_hybrid_recommendations(db, c_id, top_n=1)
+        # Fetch top hybrid recommendation using shared similarity & catalog artifacts
+        recs = get_hybrid_recommendations(db, c_id, top_n=1, prepared=hybrid_ctx)
         rec_items = recs.get("recommendations", [])
         if not rec_items:
             continue

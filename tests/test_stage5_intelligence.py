@@ -28,7 +28,7 @@ from app.services.churn_service import _extract_churn_dataset, train_and_evaluat
 from app.services.cohort_service import compute_cohort_retention
 from app.services.clv_service import compute_predictive_clv, get_single_customer_clv
 from app.services.catalog_normalizer import normalize_catalog, get_single_product_normalized, extract_unit_and_measurement, normalize_category
-from app.services.hybrid_recommender import get_hybrid_recommendations, evaluate_hybrid_engine
+from app.services.hybrid_recommender import _prepare_hybrid_context, get_hybrid_recommendations, evaluate_hybrid_engine
 from app.services.funnel_service import compute_conversion_funnel
 from app.services.offer_service import generate_personalized_offer_strategy, evaluate_stock_impact_safety, resolve_price_elasticity
 
@@ -359,6 +359,21 @@ def test_offer_strategy_segment_mapping(db_session):
         assert offer["discount_pct"] in (5.0, 10.0, 15.0)
         assert offer["discounted_price"] < offer["original_price"]
         assert len(offer["strategic_objective"]) > 0
+
+
+def test_shared_ml_context_parity_matches_direct_calls(db_session):
+    """Verify DEF-UAT-02 shared precomputed context yields exact mathematical parity."""
+    _seed_stage5_test_data(db_session)
+    churn_res = train_and_evaluate_churn_model(db_session)
+    clv_direct = compute_predictive_clv(db_session)
+    clv_shared = compute_predictive_clv(db_session, precomputed_churn=churn_res)
+    assert clv_direct["aggregate_predicted_12m_future_value"] == clv_shared["aggregate_predicted_12m_future_value"]
+    assert clv_direct["customers"] == clv_shared["customers"]
+
+    ctx = _prepare_hybrid_context(db_session)
+    rec_direct = get_hybrid_recommendations(db_session, customer_id=1, top_n=3, alpha=0.65)
+    rec_shared = get_hybrid_recommendations(db_session, customer_id=1, top_n=3, alpha=0.65, prepared=ctx)
+    assert rec_direct["recommendations"] == rec_shared["recommendations"]
 
 
 def test_price_elasticity_hierarchy(db_session):

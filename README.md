@@ -1,6 +1,6 @@
 # ShopSense / StockPilot — Multi-Vendor Retail Management, Analytics & Data Warehouse Platform
 > **Smarter Stock. Better Decisions.**  
-> *Milestones 1–4 Complete — Core Implementation, Performance Validation, Documentation & Developer-Assisted Functional UAT (`DEF-UAT-01` Resolved; External Stakeholder UAT Pending)*
+> *Milestones 1–4 Engineering Complete — `DEF-UAT-01..03` Resolved & `305 / 305` Regression Suite Verified | External Stakeholder UAT Pending | Docker Not Installed on Host | `100` Concurrent Users Reached (`500`-User Target Requires Multi-Worker Scale)*
 
 ---
 
@@ -9,16 +9,16 @@
 | Document | Audience | Purpose |
 | :--- | :--- | :--- |
 | [System Architecture](docs/system_architecture.md) | Engineers & Architects | Component overview, 16-table DB schema, RBAC/JWT, ETL, APScheduler, MLflow/models & fallbacks, full API & env reference |
-| [Deployment & Setup Guide](docs/deployment_setup_guide.md) | DevOps & Engineers | Host setup, PostgreSQL config, `.env` secrets, migrations, admin bootstrap, startup & Docker Compose topology |
+| [Deployment & Setup Guide](docs/deployment_setup_guide.md) | DevOps & Engineers | Host setup, PostgreSQL config, `.env` secrets, migrations, admin bootstrap, startup & Docker Compose topology *(Docker runtime not verified on Windows host)* |
 | [Operations Manual](docs/operations_manual.md) | Operators & Admins | Health triage, degraded fallback modes, ETL quarantine, MLflow retraining, backups, benchmarks & troubleshooting |
 | [User Guide](docs/user_guide.md) | Admin, Vendor & Customer | Login gate, vendor onboarding/approval, Executive BI, catalog, inventory, refunds, forecasting & recommendations |
-| [UAT Test Plan](docs/uat_test_plan.md) | QA & Stakeholders | 16 role-based UAT scenarios & >= 85% acceptance criteria (**External Stakeholder UAT: Pending**) |
-| [UAT Recording Template](docs/uat_recording_template.md) | QA & Stakeholders | Developer pre-UAT execution record + pending stakeholder evaluation & sign-off sheet |
-| [Step 12 UAT Execution Report](docs/uat_execution_report.md) | QA & Engineering | Developer functional UAT outcomes (`8 PASS / 7 PARTIAL / 1 BLOCKED / 0 FAIL`), `DEF-UAT-01` resolution & open UX items (`DEF-UAT-02`, `DEF-UAT-03`) |
+| [UAT Test Plan](docs/uat_test_plan.md) | QA & Stakeholders | 16 role-based UAT scenarios & >= 85% acceptance criteria (**External Stakeholder UAT: `PENDING EXTERNAL VALIDATION`**) |
+| [UAT Recording Template](docs/uat_recording_template.md) | QA & Stakeholders | Developer pre-UAT execution record (`DEF-UAT-01..03` closed) + pending stakeholder evaluation & sign-off sheet |
+| [Step 12 UAT Execution Report](docs/uat_execution_report.md) | QA & Engineering | Developer functional UAT outcomes (`8 PASS / 7 PARTIAL / 1 BLOCKED / 0 FAIL`) & `DEF-UAT-01..03` closure verification |
 | [100K Benchmark Report](docs/benchmark_100k_report.md) | Performance / Eng | Milestone 4 Phase 1 vectorized 100K transaction dataset & analytics benchmark |
 | [Phase 4 Performance Report](docs/phase4_performance_report.md) | Performance / Eng | Integrated live PostgreSQL + isolated 100K relational DB baseline vs post-optimization telemetry |
-| [Step 11 Load Testing Report](docs/load_testing_report.md) | Performance / Ops | Progressive authenticated Locust load test (`50 -> 100` concurrent users, bottlenecks & saturation bounds) |
-| [Milestone 4 Final Report](docs/milestone4_final_report.md) | Leadership & Reviewers | Consolidated Milestone 4 completion summary: Phases 1–5 results, Step 11 limits, Step 12 UAT, `DEF-UAT-01` fix, DB preservation & commit history |
+| [Step 11 Load Testing Report](docs/load_testing_report.md) | Performance / Ops | Progressive authenticated Locust load test (`50 -> 100` concurrent users reached cleanly; `500`-user target not achieved on 1-worker host) |
+| [Milestone 4 Final Report](docs/milestone4_final_report.md) | Leadership & Reviewers | Final Milestone 4 closure summary: Phases 1–5 results, `DEF-UAT-01..03` fixes, Docker/load disclosures, `305`-test pass, DB preservation & commit history |
 
 ---
 
@@ -345,12 +345,12 @@ pytest tests/ -q
 python validate_consistency.py
 ```
 
-### Verification Summary (Milestone 4 Complete)
-- **Full Repository Regression Suite:** **297 / 297 passed (`pytest tests/ -q`, verified on commit `d3629ec`)**
-- **Post-Remediation Targeted Security & UI Suite (`DEF-UAT-01`):** **93 / 93 passed (`pytest tests/test_stage7_auth_security.py tests/test_logout_refresh_token_security.py tests/test_vendor_onboarding_stage_a.py tests/test_vendor_onboarding_stage_b.py tests/test_executive_bi_dashboard.py tests/test_integration_status.py -q`, commit `513aa6c`)**
+### Verification Summary (Milestone 4 Closure)
+- **Full Repository Regression Suite:** **305 / 305 passed (`pytest tests/ -q`, `0` 1st-party deprecation warnings, post-`DEF-UAT-01..03` fixes)**
 - **Consistency Verification:** **12 / 12 passed (`100.0%` Consistency Score, `validate_consistency.py`)**
 - **100K Scale Validation:** Verified via isolated vectorized & relational benchmarks ([docs/benchmark_100k_report.md](docs/benchmark_100k_report.md), [docs/phase4_performance_report.md](docs/phase4_performance_report.md))
-- **Progressive Load & Functional UAT:** Reached `100` concurrent users (`50` stable, `0` failures, `P95 7,000 ms` single-worker ceiling; [docs/load_testing_report.md](docs/load_testing_report.md)) and completed Developer-Assisted UAT (`8 PASS`, `7 PARTIAL`, `1 BLOCKED`, `0 FAIL` after `DEF-UAT-01` fix; External Stakeholder UAT pending) — full consolidated summary in [docs/milestone4_final_report.md](docs/milestone4_final_report.md).
+- **Dashboard Latency & UI Closure:** Admin `📊 Dashboard` cold load improved `18,947.47 ms -> 6,369.57 ms` (`2.97x` parallel) / `6,881.45 ms` (`2.75x` sequential spy), version caption aligned to `v1.0.0`, and `78` `use_container_width` + `@app.on_event` deprecations resolved ([docs/uat_execution_report.md](docs/uat_execution_report.md))
+- **Progressive Load & Functional UAT:** Reached `100` concurrent users (`50` stable, `0` failures, `P95 7,000 ms` ceiling; `500`-user target `NOT ACHIEVED` on 1-worker host; [docs/load_testing_report.md](docs/load_testing_report.md)) and completed Developer-Assisted UAT (`8 PASS / 7 PARTIAL / 1 BLOCKED / 0 FAIL`; External Stakeholder UAT `PENDING EXTERNAL VALIDATION`; Docker runtime `NOT VERIFIED`) — full closure report in [docs/milestone4_final_report.md](docs/milestone4_final_report.md).
 
 ---
 

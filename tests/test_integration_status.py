@@ -422,3 +422,19 @@ def test_10_streamlit_dashboard_all_component_states():
         assert "badge-warning" in all_md
         assert "badge-critical" in all_md
 
+
+def test_11_version_caption_consistency_and_no_v2_mismatch():
+    """Verify DEF-UAT-03 remediation: dashboard sidebar version matches backend 1.0.0 cleanly."""
+    from streamlit.testing.v1 import AppTest
+    from backend.config import get_settings
+
+    expected_ver = get_settings().version
+    at = AppTest.from_file("dashboard/dashboard.py")
+    at.session_state["auth_user"] = {"id": 1, "email": "admin@shopsense.com", "role": "ADMIN"}
+    at.run(timeout=60)
+    assert len(at.exception) == 0
+
+    captions = "\n".join(c.value for c in at.caption)
+    assert f"ShopSense v{expected_ver}" in captions
+    assert "ShopSense v2.0" not in captions
+

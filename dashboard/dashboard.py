@@ -16,6 +16,7 @@ Sections:
   11. 🩺 Integration Status / System Health (Database, APIs, ML models, MLflow, Workflows diagnostics)
 """
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import html
 import os
 import sys
@@ -28,9 +29,6 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import requests
 import streamlit as st
-from sklearn.preprocessing import StandardScaler
-from sklearn.cluster import KMeans
-from sklearn.metrics import silhouette_score
 
 # ── Project Path Config ───────────────────────────────────────────────────────
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -71,16 +69,39 @@ def _get_api_base() -> str:
     return url.rstrip("/")
 
 
+def _get_app_version() -> str:
+    """Resolve platform version cleanly from backend configuration."""
+    try:
+        from backend.config import get_settings
+
+        return str(get_settings().version or "1.0.0")
+    except Exception:
+        return (os.getenv("VERSION") or os.getenv("APP_VERSION") or "1.0.0").strip()
+
+
+APP_VERSION = _get_app_version()
 API_BASE = _get_api_base()
 _api_reachable_this_run = True
+_RUN_CACHE: dict[tuple, object] = {}
+_PREFETCHED_GET: dict[str, object] = {}
+_PREFETCHED_BYTES: dict[str, bytes] = {}
+
+
+def _run_cached(key: tuple, loader):
+    """Per-script-run memoizer preventing duplicate API/DB lookups within one render."""
+    if key in _RUN_CACHE:
+        return _RUN_CACHE[key]
+    val = loader()
+    _RUN_CACHE[key] = val
+    return val
 
 
 @st.cache_data(ttl=60)
-def fetch_report_bytes(kind: str) -> bytes:
-    """Fetches PDF or Excel report binary from API or direct service fallback."""
+def _fetch_report_bytes_cached(kind: str) -> bytes:
+    """Fetch PDF or Excel report binary from API or direct service fallback."""
     if _api_reachable_this_run:
         try:
-            resp = requests.get(f"{API_BASE}/reports/{kind}", timeout=2)
+            resp = requests.get(f"{API_BASE}/reports/{kind}", timeout=5)
             if resp.status_code == 200:
                 return resp.content
         except Exception:
@@ -88,16 +109,23 @@ def fetch_report_bytes(kind: str) -> bytes:
     try:
         from app.database import SessionLocal
         from app.services.report_service import generate_pdf_report, generate_excel_report
+
         db = SessionLocal()
         try:
             if kind == "pdf":
                 return generate_pdf_report(db)
-            else:
-                return generate_excel_report(db)
+            return generate_excel_report(db)
         finally:
             db.close()
     except Exception:
         return b""
+
+
+def fetch_report_bytes(kind: str) -> bytes:
+    """Return prefetched report bytes for this render or cached report bytes."""
+    if kind in _PREFETCHED_BYTES and _PREFETCHED_BYTES[kind]:
+        return _PREFETCHED_BYTES[kind]
+    return _fetch_report_bytes_cached(kind)
 
 
 def _auth_headers() -> dict:
@@ -111,16 +139,77 @@ def _auth_headers() -> dict:
     return {}
 
 
-def api_get(path: str, timeout: float = 1.0):
-    """Safe GET helper returning JSON or None on failure."""
+def api_get(path: str, timeout: float = 2.5):
+    """Safe GET helper returning JSON (or prefetched JSON) or None on failure."""
     if not _api_reachable_this_run and path != "/":
         return None
+    if path in _PREFETCHED_GET:
+        return _PREFETCHED_GET[path]
     try:
         resp = requests.get(f"{API_BASE}{path}", headers=_auth_headers(), timeout=timeout)
         resp.raise_for_status()
         return resp.json()
     except Exception:
         return None
+
+
+def _prefetch_admin_dashboard_endpoints() -> None:
+    """
+    Concurrently prefetch read-only Admin Dashboard GET payloads when talking to a
+    live HTTP API server (skipped under pytest / monkeypatched SQLite bridges).
+    Captures headers on the main thread so worker threads never read st.session_state.
+    """
+    if "pytest" in sys.modules or getattr(requests.get, "__module__", "") != "requests.api":
+        return
+
+    headers = _auth_headers()
+    if not headers:
+        return
+
+    json_specs = [
+        ("/vendors/?limit=500", 3.0),
+        ("/analytics/inventory/status", 3.0),
+        ("/analytics/summary", 3.0),
+        ("/analytics/revenue/profit-margins", 3.0),
+        ("/analytics/customers/segments", 4.0),
+        ("/recommendations/evaluation", 4.0),
+        ("/forecast/1", 3.0),
+        ("/analytics/revenue/by-vendor", 3.0),
+        ("/analytics/revenue/by-product", 3.0),
+        ("/analytics/revenue/growth", 3.0),
+        ("/analytics/revenue/benchmarking", 3.0),
+        ("/analytics/revenue/by-category", 3.0),
+        ("/analytics/revenue/by-region", 3.0),
+        ("/products/?limit=500", 3.0),
+        ("/offers/stock-impact/1?discount_pct=15.0&horizon_days=14&confirmed_replenishment=0", 3.0),
+        ("/offers/strategy?limit=15", 6.0),
+        ("/analytics/transactions?limit=8", 3.0),
+        ("/admin/health", 5.0),
+    ]
+    report_kinds = ("pdf", "excel")
+
+    def _fetch_json(path: str, tmo: float):
+        r = requests.get(f"{API_BASE}{path}", headers=headers, timeout=tmo)
+        r.raise_for_status()
+        return ("json", path, r.json())
+
+    def _fetch_report(kind: str):
+        r = requests.get(f"{API_BASE}/reports/{kind}", headers=headers, timeout=5.0)
+        r.raise_for_status()
+        return ("bytes", kind, r.content)
+
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        futures = [pool.submit(_fetch_json, p, tmo) for p, tmo in json_specs]
+        futures.extend(pool.submit(_fetch_report, k) for k in report_kinds)
+        for fut in as_completed(futures):
+            try:
+                kind_tag, key, data = fut.result()
+                if kind_tag == "json":
+                    _PREFETCHED_GET[key] = data
+                else:
+                    _PREFETCHED_BYTES[key] = data
+            except Exception:
+                pass
 
 
 def _format_api_error(resp) -> str:
@@ -569,7 +658,7 @@ def render_login_page():
                 )
                 login_submitted = st.button(
                     "Sign In to ShopSense",
-                    use_container_width=True,
+                    width="stretch",
                     key="btn_login_submit",
                 )
                 if login_submitted:
@@ -604,7 +693,7 @@ def render_login_page():
                 )
                 reg_submitted = st.button(
                     "Create Customer Account",
-                    use_container_width=True,
+                    width="stretch",
                     key="btn_reg_submit",
                 )
                 if reg_submitted:
@@ -637,7 +726,7 @@ def render_login_page():
                 vreg_tax = st.text_input("Tax / GST ID (Optional)", placeholder="e.g. 27AAACM1234F1Z5", key="vreg_tax")
                 vreg_pw = st.text_input("Password*", type="password", key="vreg_pw")
                 vreg_pw2 = st.text_input("Confirm Password*", type="password", key="vreg_pw2")
-                vreg_submitted = st.form_submit_button("Submit Vendor Application", use_container_width=True)
+                vreg_submitted = st.form_submit_button("Submit Vendor Application", width="stretch")
 
                 if vreg_submitted:
                     chosen_cat = (vreg_cat_other or "").strip() if vreg_cat == "Other" else vreg_cat
@@ -783,7 +872,7 @@ with st.sidebar:
     elif current_role == "CUSTOMER" and auth_user.get("customer_id"):
         st.caption(f"Customer ID: `{auth_user.get('customer_id')}`")
 
-    if st.button("🚪 Log Out", use_container_width=True, key="auth_logout_btn"):
+    if st.button("🚪 Log Out", width="stretch", key="auth_logout_btn"):
         logout_ok, _ = _perform_dashboard_logout()
         if logout_ok:
             st.rerun()
@@ -791,7 +880,10 @@ with st.sidebar:
     if st.session_state.get("auth_logout_error"):
         st.error(st.session_state["auth_logout_error"])
 
-    st.caption("ShopSense v2.0 • Enterprise Edition")
+    st.caption(f"ShopSense v{APP_VERSION} • Enterprise Edition")
+
+if selected_page == "📊 Dashboard" and current_role not in ("VENDOR", "CUSTOMER") and is_live_api and _api_reachable_this_run:
+    _prefetch_admin_dashboard_endpoints()
 
 
 def _vendor_orm_to_dict(v) -> dict:
@@ -838,30 +930,37 @@ def fetch_my_vendor_profile() -> dict | None:
     if not vid:
         return None
 
-    if is_live_api and _api_reachable_this_run and st.session_state.get("auth_token"):
-        me_res = api_get("/vendors/me")
-        if isinstance(me_res, dict) and me_res.get("id"):
-            return me_res
+    cache_key = ("my_vendor_profile", int(vid), is_live_api, _api_reachable_this_run)
+    if cache_key in _RUN_CACHE:
+        return _RUN_CACHE[cache_key]
 
-    try:
-        from app.database import SessionLocal
-        from app.models.vendor import Vendor
+    def _load_profile():
+        if is_live_api and _api_reachable_this_run and st.session_state.get("auth_token"):
+            me_res = api_get("/vendors/me")
+            if isinstance(me_res, dict) and me_res.get("id"):
+                return me_res
 
-        db = SessionLocal()
         try:
-            v = db.query(Vendor).filter(Vendor.id == int(vid)).first()
-            if v:
-                return _vendor_orm_to_dict(v)
-        finally:
-            db.close()
-    except Exception:
-        pass
+            from app.database import SessionLocal
+            from app.models.vendor import Vendor
 
-    if not csv_data["vendors"].empty:
-        matched = csv_data["vendors"][csv_data["vendors"]["id"] == int(vid)]
-        if not matched.empty:
-            return matched.iloc[0].to_dict()
-    return None
+            db = SessionLocal()
+            try:
+                v = db.query(Vendor).filter(Vendor.id == int(vid)).first()
+                if v:
+                    return _vendor_orm_to_dict(v)
+            finally:
+                db.close()
+        except Exception:
+            pass
+
+        if not csv_data["vendors"].empty:
+            matched = csv_data["vendors"][csv_data["vendors"]["id"] == int(vid)]
+            if not matched.empty:
+                return matched.iloc[0].to_dict()
+        return None
+
+    return _run_cached(cache_key, _load_profile)
 
 
 def render_vendor_status_banner(vendor_profile: dict | None):
@@ -1016,178 +1115,201 @@ def update_vendor_profile_action(vendor_id: int, payload: dict) -> tuple[dict | 
 
 # Helper to get unified vendors list (strictly role-scoped to protect sensitive fields)
 def get_vendors_list():
-    if current_role == "VENDOR":
-        my_prof = fetch_my_vendor_profile()
-        return pd.DataFrame([my_prof]) if my_prof else pd.DataFrame()
+    vid_scope = auth_user.get("vendor_id") if auth_user else None
+    cache_key = ("vendors_list", current_role, vid_scope, is_live_api, _api_reachable_this_run)
+    if cache_key in _RUN_CACHE:
+        return _RUN_CACHE[cache_key].copy()
 
-    if current_role == "ADMIN":
-        if is_live_api and _api_reachable_this_run:
-            v_list = api_get("/vendors/?limit=500")
-            if v_list is not None:
-                return pd.DataFrame(v_list)
+    def _load_vendors():
+        if current_role == "VENDOR":
+            my_prof = fetch_my_vendor_profile()
+            return pd.DataFrame([my_prof]) if my_prof else pd.DataFrame()
+
+        if current_role == "ADMIN":
+            if is_live_api and _api_reachable_this_run:
+                v_list = api_get("/vendors/?limit=500")
+                if v_list is not None:
+                    return pd.DataFrame(v_list)
+            try:
+                from app.database import SessionLocal
+                from app.models.vendor import Vendor
+
+                db = SessionLocal()
+                try:
+                    rows = [_vendor_orm_to_dict(v) for v in db.query(Vendor).order_by(Vendor.id.asc()).all()]
+                    if rows:
+                        return pd.DataFrame(rows)
+                finally:
+                    db.close()
+            except Exception:
+                pass
+            return csv_data["vendors"].copy()
+
+        # Public / Customer storefront context: return ONLY operational public vendor ID/Name/Category
         try:
             from app.database import SessionLocal
             from app.models.vendor import Vendor
 
             db = SessionLocal()
             try:
-                rows = [_vendor_orm_to_dict(v) for v in db.query(Vendor).order_by(Vendor.id.asc()).all()]
+                rows = (
+                    db.query(Vendor.id, Vendor.name, Vendor.business_type, Vendor.status)
+                    .filter(Vendor.status.in_(OPERATIONAL_VENDOR_STATUSES))
+                    .order_by(Vendor.id.asc())
+                    .all()
+                )
                 if rows:
-                    return pd.DataFrame(rows)
+                    return pd.DataFrame([
+                        {"id": r.id, "name": r.name, "business_type": r.business_type, "status": r.status}
+                        for r in rows
+                    ])
             finally:
                 db.close()
         except Exception:
             pass
-        return csv_data["vendors"].copy()
+        df_pub = csv_data["vendors"].copy()
+        if not df_pub.empty:
+            if "status" in df_pub.columns:
+                df_pub = df_pub[df_pub["status"].isin(OPERATIONAL_VENDOR_STATUSES)]
+            safe_cols = [c for c in ["id", "name", "business_type", "status"] if c in df_pub.columns]
+            return df_pub[safe_cols]
+        return df_pub
 
-    # Public / Customer storefront context: return ONLY operational public vendor ID/Name/Category
-    try:
-        from app.database import SessionLocal
-        from app.models.vendor import Vendor
-
-        db = SessionLocal()
-        try:
-            rows = (
-                db.query(Vendor.id, Vendor.name, Vendor.business_type, Vendor.status)
-                .filter(Vendor.status.in_(OPERATIONAL_VENDOR_STATUSES))
-                .order_by(Vendor.id.asc())
-                .all()
-            )
-            if rows:
-                return pd.DataFrame([
-                    {"id": r.id, "name": r.name, "business_type": r.business_type, "status": r.status}
-                    for r in rows
-                ])
-        finally:
-            db.close()
-    except Exception:
-        pass
-    df_pub = csv_data["vendors"].copy()
-    if not df_pub.empty:
-        if "status" in df_pub.columns:
-            df_pub = df_pub[df_pub["status"].isin(OPERATIONAL_VENDOR_STATUSES)]
-        safe_cols = [c for c in ["id", "name", "business_type", "status"] if c in df_pub.columns]
-        return df_pub[safe_cols]
-    return df_pub
+    return _run_cached(cache_key, _load_vendors).copy()
 
 
 # Helper to get unified products list (role-scoped for VENDOR management vs public storefront)
 def get_products_list(scope_to_vendor: bool = True):
-    if current_role == "VENDOR" and scope_to_vendor:
-        vid = auth_user.get("vendor_id") if auth_user else None
-        if not vid:
-            return pd.DataFrame()
+    vid_scope = auth_user.get("vendor_id") if auth_user else None
+    cache_key = ("products_list", current_role, vid_scope, bool(scope_to_vendor), is_live_api, _api_reachable_this_run)
+    if cache_key in _RUN_CACHE:
+        return _RUN_CACHE[cache_key].copy()
+
+    def _load_products():
+        if current_role == "VENDOR" and scope_to_vendor:
+            vid = auth_user.get("vendor_id") if auth_user else None
+            if not vid:
+                return pd.DataFrame()
+            if is_live_api and _api_reachable_this_run:
+                p_list = api_get(f"/products/?vendor_id={int(vid)}&limit=500")
+                if p_list is not None:
+                    return pd.DataFrame(p_list)
+            try:
+                from app.database import SessionLocal
+                from app.models.product import Product
+
+                db = SessionLocal()
+                try:
+                    prods = db.query(Product).filter(Product.vendor_id == int(vid)).order_by(Product.id.asc()).all()
+                    return pd.DataFrame([
+                        {
+                            "id": p.id,
+                            "name": p.name,
+                            "description": p.description,
+                            "price": float(p.price),
+                            "cost_price": float(p.cost_price) if p.cost_price is not None else None,
+                            "category": p.category,
+                            "parent_category": p.parent_category,
+                            "vendor_id": p.vendor_id,
+                        }
+                        for p in prods
+                    ])
+                finally:
+                    db.close()
+            except Exception:
+                pass
+            df_csv = csv_data["products"].copy()
+            return df_csv[df_csv["vendor_id"] == int(vid)] if not df_csv.empty else df_csv
+
         if is_live_api and _api_reachable_this_run:
-            p_list = api_get(f"/products/?vendor_id={int(vid)}&limit=500")
+            p_list = api_get("/products/?limit=500")
             if p_list is not None:
                 return pd.DataFrame(p_list)
+
         try:
             from app.database import SessionLocal
             from app.models.product import Product
+            from app.models.vendor import Vendor
 
             db = SessionLocal()
             try:
-                prods = db.query(Product).filter(Product.vendor_id == int(vid)).order_by(Product.id.asc()).all()
-                return pd.DataFrame([
-                    {
-                        "id": p.id,
-                        "name": p.name,
-                        "description": p.description,
-                        "price": float(p.price),
-                        "cost_price": float(p.cost_price) if p.cost_price is not None else None,
-                        "category": p.category,
-                        "parent_category": p.parent_category,
-                        "vendor_id": p.vendor_id,
-                    }
-                    for p in prods
-                ])
+                q = db.query(Product).join(Vendor, Product.vendor_id == Vendor.id)
+                if current_role != "ADMIN" or not scope_to_vendor:
+                    q = q.filter(Vendor.status.in_(OPERATIONAL_VENDOR_STATUSES))
+                prods = q.order_by(Product.id.asc()).all()
+                if prods:
+                    return pd.DataFrame([
+                        {
+                            "id": p.id,
+                            "name": p.name,
+                            "description": p.description,
+                            "price": float(p.price),
+                            "cost_price": float(p.cost_price) if p.cost_price is not None else None,
+                            "category": p.category,
+                            "parent_category": p.parent_category,
+                            "vendor_id": p.vendor_id,
+                        }
+                        for p in prods
+                    ])
             finally:
                 db.close()
         except Exception:
             pass
-        df_csv = csv_data["products"].copy()
-        return df_csv[df_csv["vendor_id"] == int(vid)] if not df_csv.empty else df_csv
+        return csv_data["products"].copy()
 
-    if is_live_api and _api_reachable_this_run:
-        p_list = api_get("/products/?limit=500")
-        if p_list is not None:
-            return pd.DataFrame(p_list)
-
-    try:
-        from app.database import SessionLocal
-        from app.models.product import Product
-        from app.models.vendor import Vendor
-
-        db = SessionLocal()
-        try:
-            q = db.query(Product).join(Vendor, Product.vendor_id == Vendor.id)
-            if current_role != "ADMIN" or not scope_to_vendor:
-                q = q.filter(Vendor.status.in_(OPERATIONAL_VENDOR_STATUSES))
-            prods = q.order_by(Product.id.asc()).all()
-            if prods:
-                return pd.DataFrame([
-                    {
-                        "id": p.id,
-                        "name": p.name,
-                        "description": p.description,
-                        "price": float(p.price),
-                        "cost_price": float(p.cost_price) if p.cost_price is not None else None,
-                        "category": p.category,
-                        "parent_category": p.parent_category,
-                        "vendor_id": p.vendor_id,
-                    }
-                    for p in prods
-                ])
-        finally:
-            db.close()
-    except Exception:
-        pass
-    return csv_data["products"].copy()
+    return _run_cached(cache_key, _load_products).copy()
 
 
 def get_inventory_status_records():
     """Fetch role-scoped inventory status records (API first, DB/CSV scoped fallback)."""
-    if is_live_api and _api_reachable_this_run:
-        inv_res = api_get("/analytics/inventory/status")
-        if inv_res is not None:
-            return inv_res
-
     vid = int(auth_user["vendor_id"]) if (current_role == "VENDOR" and auth_user and auth_user.get("vendor_id")) else None
-    if current_role == "VENDOR" and not vid:
-        return []
-    if current_role == "CUSTOMER":
-        return []
+    cache_key = ("inventory_status", current_role, vid, is_live_api, _api_reachable_this_run)
+    if cache_key in _RUN_CACHE:
+        return _RUN_CACHE[cache_key]
 
-    try:
-        from app.database import SessionLocal
-        from app.services import inventory_service
+    def _load_inventory():
+        if is_live_api and _api_reachable_this_run:
+            inv_res = api_get("/analytics/inventory/status")
+            if inv_res is not None:
+                return inv_res
 
-        db = SessionLocal()
+        if current_role == "VENDOR" and not vid:
+            return []
+        if current_role == "CUSTOMER":
+            return []
+
         try:
-            return inventory_service.get_inventory_status(db, vendor_id=vid)
-        finally:
-            db.close()
-    except Exception:
-        pass
+            from app.database import SessionLocal
+            from app.services import inventory_service
 
-    if not csv_data["inventory"].empty:
-        merged_inv = csv_data["inventory"].merge(csv_data["products"], left_on="product_id", right_on="id")
-        if vid is not None:
-            merged_inv = merged_inv[merged_inv["vendor_id"] == vid]
-        return [
-            {
-                "product_id": int(r["product_id"]),
-                "product_name": r["name"],
-                "price": float(r["price"]),
-                "current_stock": int(r["current_stock"]),
-                "reorder_level": int(r["reorder_level"]),
-                "warehouse": r.get("warehouse", "Main"),
-                "stock_value": round(float(r["current_stock"]) * float(r["price"]), 2),
-                "status": "HEALTHY" if r["current_stock"] > r["reorder_level"] else ("LOW_STOCK" if r["current_stock"] > 0 else "OUT_OF_STOCK"),
-            }
-            for _, r in merged_inv.iterrows()
-        ]
-    return []
+            db = SessionLocal()
+            try:
+                return inventory_service.get_inventory_status(db, vendor_id=vid)
+            finally:
+                db.close()
+        except Exception:
+            pass
+
+        if not csv_data["inventory"].empty:
+            merged_inv = csv_data["inventory"].merge(csv_data["products"], left_on="product_id", right_on="id")
+            if vid is not None:
+                merged_inv = merged_inv[merged_inv["vendor_id"] == vid]
+            return [
+                {
+                    "product_id": int(r["product_id"]),
+                    "product_name": r["name"],
+                    "price": float(r["price"]),
+                    "current_stock": int(r["current_stock"]),
+                    "reorder_level": int(r["reorder_level"]),
+                    "warehouse": r.get("warehouse", "Main"),
+                    "stock_value": round(float(r["current_stock"]) * float(r["price"]), 2),
+                    "status": "HEALTHY" if r["current_stock"] > r["reorder_level"] else ("LOW_STOCK" if r["current_stock"] > 0 else "OUT_OF_STOCK"),
+                }
+                for _, r in merged_inv.iterrows()
+            ]
+        return []
+
+    return _run_cached(cache_key, _load_inventory)
 
 
 def get_stock_movements_records(limit: int = 100):
@@ -1316,6 +1438,9 @@ def get_transactions_records(limit: int = 300):
 
 def fetch_integration_health(live_api: bool, api_online: bool) -> dict:
     """Fetch system integration health via /admin/health API or direct service fallback."""
+    if live_api and api_online and "/admin/health" in _PREFETCHED_GET:
+        return _PREFETCHED_GET["/admin/health"]
+
     headers = _auth_headers()
     if live_api and api_online and headers:
         try:
@@ -1351,7 +1476,8 @@ def render_integration_status_section(live_api: bool, api_online: bool, key_pref
         st.markdown("### 🩺 Integration Status / System Health")
         st.caption("Real-time diagnostics across Database, APIs, ML Models, MLflow, and Automated Workflows")
     with hdr_col2:
-        st.button("🔄 Refresh Health", key=f"{key_prefix}_refresh_btn", use_container_width=True)
+        if st.button("🔄 Refresh Health", key=f"{key_prefix}_refresh_btn", width="stretch"):
+            _PREFETCHED_GET.pop("/admin/health", None)
 
     health_report = fetch_integration_health(live_api=live_api, api_online=api_online)
 
@@ -1460,7 +1586,7 @@ def render_integration_status_section(live_api: bool, api_online: bool, key_pref
             }
             for c in ordered_components
         ])
-        st.dataframe(df_health, use_container_width=True, hide_index=True)
+        st.dataframe(df_health, width="stretch", hide_index=True)
 
 
 def render_top_header_bar():
@@ -1516,7 +1642,7 @@ def render_top_header_bar():
             st.markdown('<div class="ss-pill">📁 Demo CSV</div>', unsafe_allow_html=True)
     with c_bell:
         bell_lbl = f"🔔 {len(alerts)}" if alerts else "🔔 0"
-        with st.popover(bell_lbl, use_container_width=True):
+        with st.popover(bell_lbl, width="stretch"):
             st.markdown("**Operational Notifications**")
             if alerts:
                 for lvl, msg in alerts:
@@ -1554,7 +1680,7 @@ def render_top_header_bar():
                 if not p_hits.empty:
                     matches_shown = True
                     st.caption("Products")
-                    st.dataframe(p_hits[[c for c in ["id", "name", "category", "price", "vendor_id"] if c in p_hits.columns]], use_container_width=True, hide_index=True)
+                    st.dataframe(p_hits[[c for c in ["id", "name", "category", "price", "vendor_id"] if c in p_hits.columns]], width="stretch", hide_index=True)
             if current_role == "ADMIN":
                 df_v_srch = get_vendors_list()
                 if not df_v_srch.empty:
@@ -1563,7 +1689,7 @@ def render_top_header_bar():
                     if not v_hits.empty:
                         matches_shown = True
                         st.caption("Vendors")
-                        st.dataframe(v_hits[[c for c in ["id", "name", "owner_name", "email", "status"] if c in v_hits.columns]], use_container_width=True, hide_index=True)
+                        st.dataframe(v_hits[[c for c in ["id", "name", "owner_name", "email", "status"] if c in v_hits.columns]], width="stretch", hide_index=True)
             if not matches_shown:
                 st.info("No matching products or records found for your current role scope.")
 
@@ -1620,17 +1746,17 @@ if selected_page == "📊 Dashboard":
         vq1, vq2, vq3 = st.columns(3)
         with vq1:
             st.markdown(render_quick_tile_html("👤", "Store Profile & Status", f"Status: {v_status}"), unsafe_allow_html=True)
-            if st.button("Open Vendor Profile →", key="vq_btn_vend", use_container_width=True):
+            if st.button("Open Vendor Profile →", key="vq_btn_vend", width="stretch"):
                 st.session_state["pending_nav_redirect"] = "🏢 Vendor Management"
                 st.rerun()
         with vq2:
             st.markdown(render_quick_tile_html("📦", "My Product Catalog", f"{len(my_prods)} listed item(s)"), unsafe_allow_html=True)
-            if st.button("Manage Products →", key="vq_btn_prod", use_container_width=True):
+            if st.button("Manage Products →", key="vq_btn_prod", width="stretch"):
                 st.session_state["pending_nav_redirect"] = "📦 Product Management"
                 st.rerun()
         with vq3:
             st.markdown(render_quick_tile_html("📋", "Warehouse Inventory", f"{low_v_cnt} alert(s) active"), unsafe_allow_html=True)
-            if st.button("Manage Inventory →", key="vq_btn_inv", use_container_width=True):
+            if st.button("Manage Inventory →", key="vq_btn_inv", width="stretch"):
                 st.session_state["pending_nav_redirect"] = "📋 Inventory Management"
                 st.rerun()
 
@@ -1640,7 +1766,7 @@ if selected_page == "📊 Dashboard":
             st.subheader("📋 My Inventory Snapshot")
             if my_inv:
                 df_my_inv = pd.DataFrame(my_inv)[["product_name", "current_stock", "reorder_level", "status"]]
-                st.dataframe(df_my_inv, use_container_width=True, hide_index=True)
+                st.dataframe(df_my_inv, width="stretch", hide_index=True)
                 status_cnt_v = df_my_inv["status"].value_counts().reset_index()
                 status_cnt_v.columns = ["Status", "Count"]
                 fig_vinv = px.pie(
@@ -1653,7 +1779,7 @@ if selected_page == "📊 Dashboard":
                     color_discrete_map={"HEALTHY": "#10B981", "LOW_STOCK": "#F59E0B", "OUT_OF_STOCK": "#EF4444", "CRITICAL": "#EF4444"},
                 )
                 style_chart(fig_vinv, height=300)
-                st.plotly_chart(fig_vinv, use_container_width=True)
+                st.plotly_chart(fig_vinv, width="stretch")
             else:
                 st.info("No products or inventory records listed under your store yet.")
 
@@ -1661,7 +1787,7 @@ if selected_page == "📊 Dashboard":
             st.subheader("⏱️ My Recent Transactions")
             if my_txs:
                 df_my_tx = pd.DataFrame(my_txs)[["transaction_id", "transaction_date", "product_name", "quantity", "amount"]].head(10)
-                st.dataframe(df_my_tx, use_container_width=True, hide_index=True)
+                st.dataframe(df_my_tx, width="stretch", hide_index=True)
                 by_p_v = pd.DataFrame(my_txs).groupby("product_name")["amount"].sum().reset_index().sort_values("amount", ascending=True)
                 fig_vtx = px.bar(
                     by_p_v,
@@ -1673,7 +1799,7 @@ if selected_page == "📊 Dashboard":
                     title="My Store Revenue by Product",
                 )
                 style_chart(fig_vtx, height=300, show_legend=False)
-                st.plotly_chart(fig_vtx, use_container_width=True)
+                st.plotly_chart(fig_vtx, width="stretch")
             else:
                 st.info("No store transactions recorded yet.")
 
@@ -1755,10 +1881,10 @@ if selected_page == "📊 Dashboard":
         with hero_c2:
             st.markdown('<div class="sp-card" style="padding:16px;">', unsafe_allow_html=True)
             st.markdown('<div class="sp-card-title">Quick Governance &amp; Export</div>', unsafe_allow_html=True)
-            if st.button(f"⏳ Review Pending ({pending_v_cnt})", key="hero_btn_pending", use_container_width=True):
+            if st.button(f"⏳ Review Pending ({pending_v_cnt})", key="hero_btn_pending", width="stretch"):
                 st.session_state["pending_nav_redirect"] = "🏢 Vendor Management"
                 st.rerun()
-            if st.button("🩺 System Health", key="hero_btn_health", use_container_width=True):
+            if st.button("🩺 System Health", key="hero_btn_health", width="stretch"):
                 st.session_state["pending_nav_redirect"] = "🩺 Integration Status / System Health"
                 st.rerun()
             pdf_bytes = fetch_report_bytes("pdf")
@@ -1768,10 +1894,10 @@ if selected_page == "📊 Dashboard":
                     data=pdf_bytes,
                     file_name="shopsense_executive_report.pdf",
                     mime="application/pdf",
-                    use_container_width=True,
+                    width="stretch",
                 )
             else:
-                st.button("📄 Export PDF Report", disabled=True, use_container_width=True)
+                st.button("📄 Export PDF Report", disabled=True, width="stretch")
             excel_bytes = fetch_report_bytes("excel")
             if excel_bytes:
                 st.download_button(
@@ -1779,32 +1905,32 @@ if selected_page == "📊 Dashboard":
                     data=excel_bytes,
                     file_name="shopsense_executive_report.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True,
+                    width="stretch",
                 )
             else:
-                st.button("📊 Export Excel Report", disabled=True, use_container_width=True)
+                st.button("📊 Export Excel Report", disabled=True, width="stretch")
             st.markdown("</div>", unsafe_allow_html=True)
 
         # Quick Module Strip (4 rounded white highlight cards)
         qm1, qm2, qm3, qm4 = st.columns(4)
         with qm1:
             st.markdown(render_quick_tile_html("📋", "Inventory Intelligence", f"{inv_units_dash:,} units • {inv_low_dash} alert(s)"), unsafe_allow_html=True)
-            if st.button("Open Inventory →", key="qm_btn_inv", use_container_width=True):
+            if st.button("Open Inventory →", key="qm_btn_inv", width="stretch"):
                 st.session_state["pending_nav_redirect"] = "📋 Inventory Management"
                 st.rerun()
         with qm2:
             st.markdown(render_quick_tile_html("📈", "Demand Forecasting", "Seasonal Holdout + RF Projections"), unsafe_allow_html=True)
-            if st.button("Open Forecasting →", key="qm_btn_fc", use_container_width=True):
+            if st.button("Open Forecasting →", key="qm_btn_fc", width="stretch"):
                 st.session_state["pending_nav_redirect"] = "📈 Demand Forecasting"
                 st.rerun()
         with qm3:
             st.markdown(render_quick_tile_html("👥", "Customer Analytics", "RFM Personas, Churn & CLV"), unsafe_allow_html=True)
-            if st.button("Open Customers →", key="qm_btn_cust", use_container_width=True):
+            if st.button("Open Customers →", key="qm_btn_cust", width="stretch"):
                 st.session_state["pending_nav_redirect"] = "👥 Customer Analytics"
                 st.rerun()
         with qm4:
             st.markdown(render_quick_tile_html("🎯", "Recommendation Engine", "Hybrid CF + TF-IDF Content"), unsafe_allow_html=True)
-            if st.button("Open Recommendations →", key="qm_btn_rec", use_container_width=True):
+            if st.button("Open Recommendations →", key="qm_btn_rec", width="stretch"):
                 st.session_state["pending_nav_redirect"] = "🎯 Recommendations"
                 st.rerun()
 
@@ -1857,13 +1983,13 @@ if selected_page == "📊 Dashboard":
                     color_discrete_map={"HEALTHY": "#10B981", "LOW_STOCK": "#F59E0B", "OUT_OF_STOCK": "#EF4444", "CRITICAL": "#EF4444"},
                 )
                 style_chart(fig_ov_inv, height=290)
-                st.plotly_chart(fig_ov_inv, use_container_width=True)
+                st.plotly_chart(fig_ov_inv, width="stretch")
             with ov_c_right:
                 low_items_df = df_inv_ov[df_inv_ov["status"] != "HEALTHY"]
                 if not low_items_df.empty:
                     st.markdown("##### 🚨 Active Reorder Threshold Alerts")
                     cols_al = [c for c in ["product_name", "vendor_name", "current_stock", "reorder_level", "status"] if c in low_items_df.columns]
-                    st.dataframe(low_items_df[cols_al], use_container_width=True, hide_index=True)
+                    st.dataframe(low_items_df[cols_al], width="stretch", hide_index=True)
                 else:
                     st.success("All catalog SKUs are above reorder thresholds.")
         else:
@@ -1879,7 +2005,7 @@ if selected_page == "📊 Dashboard":
 
         with intel1:
             st.markdown("##### 👥 Customer Segmentation")
-            seg_info = api_get("/analytics/customers/segments") if is_live_api else None
+            seg_info = api_get("/analytics/customers/segments", timeout=4.0) if is_live_api else None
             sil_val = seg_info.get("silhouette_score", 0.572) if seg_info else 0.572
             db_val = seg_info.get("davies_bouldin_index", 0.553) if seg_info else 0.553
             n_clusters = seg_info.get("n_clusters", 2) if seg_info else 2
@@ -1889,7 +2015,7 @@ if selected_page == "📊 Dashboard":
 
         with intel2:
             st.markdown("##### 🎯 Recommendation Engine")
-            rec_eval = api_get("/recommendations/evaluation") if is_live_api else None
+            rec_eval = api_get("/recommendations/evaluation", timeout=4.0) if is_live_api else None
             hr3_val = rec_eval.get("hit_rate_at_3", 0.9375) * 100.0 if rec_eval else 93.8
             rec3_val = rec_eval.get("recall_at_3", 0.8594) * 100.0 if rec_eval else 85.9
             st.metric("Relevance (Hit Rate@3)", f"{hr3_val:.1f}%", delta="Target: >= 75% (MET)")
@@ -1928,7 +2054,7 @@ if selected_page == "📊 Dashboard":
                 )
                 style_chart(fig_v, show_legend=False)
                 fig_v.update_layout(xaxis_tickangle=-22, coloraxis_showscale=False)
-                st.plotly_chart(fig_v, use_container_width=True)
+                st.plotly_chart(fig_v, width="stretch")
             else:
                 st.info("No vendor revenue records available.")
 
@@ -1949,7 +2075,7 @@ if selected_page == "📊 Dashboard":
                     color_discrete_sequence=BRAND_PALETTE,
                 )
                 style_chart(fig_p)
-                st.plotly_chart(fig_p, use_container_width=True)
+                st.plotly_chart(fig_p, width="stretch")
             else:
                 st.info("No product revenue records available.")
 
@@ -2003,7 +2129,7 @@ if selected_page == "📊 Dashboard":
                 fig_g.update_layout(legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
                 fig_g.update_yaxes(title_text="Revenue (₹)", secondary_y=False)
                 fig_g.update_yaxes(title_text="MoM Growth (%)", secondary_y=True)
-                st.plotly_chart(fig_g, use_container_width=True)
+                st.plotly_chart(fig_g, width="stretch")
             else:
                 st.info("Insufficient monthly revenue history for growth trends.")
 
@@ -2039,7 +2165,7 @@ if selected_page == "📊 Dashboard":
                 fig_bench.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
                 style_chart(fig_bench, show_legend=False)
                 fig_bench.update_layout(coloraxis_showscale=False)
-                st.plotly_chart(fig_bench, use_container_width=True)
+                st.plotly_chart(fig_bench, width="stretch")
             else:
                 st.info("No vendor benchmarking records available.")
 
@@ -2055,7 +2181,7 @@ if selected_page == "📊 Dashboard":
                 fig_cat = px.bar(df_cat, x="category", y="revenue", color="revenue", color_continuous_scale=BRAND_CONTINUOUS_SCALE, labels={"revenue": "Revenue (₹)", "category": "Category"})
                 style_chart(fig_cat, show_legend=False)
                 fig_cat.update_layout(xaxis_tickangle=-20, coloraxis_showscale=False)
-                st.plotly_chart(fig_cat, use_container_width=True)
+                st.plotly_chart(fig_cat, width="stretch")
             else:
                 st.info("No category revenue records available.")
 
@@ -2066,7 +2192,7 @@ if selected_page == "📊 Dashboard":
                 df_reg = pd.DataFrame(reg_data["regions"])
                 fig_reg = px.pie(df_reg, names="region", values="revenue", hole=0.45, color_discrete_sequence=BRAND_PALETTE)
                 style_chart(fig_reg)
-                st.plotly_chart(fig_reg, use_container_width=True)
+                st.plotly_chart(fig_reg, width="stretch")
             else:
                 st.info("No regional customer revenue records available.")
 
@@ -2094,8 +2220,8 @@ if selected_page == "📊 Dashboard":
                 st.button("Evaluate Stock Safety", key="btn_run_sim")
 
             with sim_col2:
-                sim_result = api_get(f"/offers/stock-impact/{sim_pid}?discount_pct={sim_disc}&horizon_days={sim_days}&confirmed_replenishment={sim_po}") if is_live_api else None
-                if not sim_result:
+                sim_result = api_get(f"/offers/stock-impact/{sim_pid}?discount_pct={sim_disc}&horizon_days={sim_days}&confirmed_replenishment={sim_po}", timeout=4.0) if is_live_api else None
+                if not sim_result and not (is_live_api and _api_reachable_this_run):
                     try:
                         from app.database import SessionLocal
                         from app.services.offer_service import evaluate_stock_impact_safety
@@ -2125,8 +2251,8 @@ if selected_page == "📊 Dashboard":
 
         with offer_tab_strat:
             st.markdown("##### 📋 AI-Generated Segment Offer Strategy")
-            strat_data = api_get("/offers/strategy?limit=15") if is_live_api else None
-            if not strat_data:
+            strat_data = api_get("/offers/strategy?limit=15", timeout=6.0) if is_live_api else None
+            if not strat_data and not (is_live_api and _api_reachable_this_run):
                 try:
                     from app.database import SessionLocal
                     from app.services.offer_service import generate_personalized_offer_strategy
@@ -2143,7 +2269,7 @@ if selected_page == "📊 Dashboard":
                 cols_show = ["offer_id", "customer_name", "target_segment", "product_name", "original_price", "discount_pct", "discounted_price", "strategic_objective", "recommendation_pathway"]
                 df_strat_show = pd.DataFrame(strat_data["offers"])
                 valid_cols = [c for c in cols_show if c in df_strat_show.columns]
-                st.dataframe(df_strat_show[valid_cols], use_container_width=True)
+                st.dataframe(df_strat_show[valid_cols], width="stretch")
             else:
                 st.info("No active personalized offer proposals.")
 
@@ -2168,7 +2294,7 @@ if selected_page == "📊 Dashboard":
             ]
 
         if tx_recent:
-            st.dataframe(pd.DataFrame(tx_recent), use_container_width=True)
+            st.dataframe(pd.DataFrame(tx_recent), width="stretch")
         else:
             st.info("No recent transaction activity recorded.")
 
@@ -2252,7 +2378,7 @@ elif selected_page == "🏢 Vendor Management":
                     ms1.metric("💵 Net Sales", f"₹{my_settle.get('total_net_sales', 0.0):,.2f}")
                     ms2.metric("🏛️ Platform Commission", f"₹{my_settle.get('total_platform_commission', 0.0):,.2f}")
                     ms3.metric("🤝 Payable Payout", f"₹{my_settle.get('total_vendor_payouts', 0.0):,.2f}")
-                    st.dataframe(pd.DataFrame(my_settle["settlements"]), use_container_width=True, hide_index=True)
+                    st.dataframe(pd.DataFrame(my_settle["settlements"]), width="stretch", hide_index=True)
                 else:
                     st.info("No settled transactions recorded for your vendor account yet.")
 
@@ -2327,7 +2453,7 @@ elif selected_page == "🏢 Vendor Management":
                     "compliance_status": "Compliance",
                     "created_at": "Submitted At",
                 })
-                st.dataframe(q_disp, use_container_width=True, hide_index=True)
+                st.dataframe(q_disp, width="stretch", hide_index=True)
 
                 st.markdown("---")
                 pending_opts = {
@@ -2370,7 +2496,7 @@ elif selected_page == "🏢 Vendor Management":
                 )
 
                 act_c1, act_c2 = st.columns(2)
-                if act_c1.button("✅ Approve Application", key="btn_pending_approve", use_container_width=True):
+                if act_c1.button("✅ Approve Application", key="btn_pending_approve", width="stretch"):
                     st.session_state["pending_confirm_action"] = {
                         "vendor_id": int(sel_pid),
                         "vendor_name": str(sel_row.get("name")),
@@ -2380,7 +2506,7 @@ elif selected_page == "🏢 Vendor Management":
                         "notes": (pending_notes or "").strip() or "Application verified and approved by administrator.",
                     }
 
-                if act_c2.button("❌ Reject Application", key="btn_pending_reject", use_container_width=True):
+                if act_c2.button("❌ Reject Application", key="btn_pending_reject", width="stretch"):
                     if not (pending_notes or "").strip():
                         st.error("Verification/rejection feedback notes are required before rejecting an application.")
                     else:
@@ -2402,7 +2528,7 @@ elif selected_page == "🏢 Vendor Management":
                         f"\n\n**Verification Notes:** {confirm_ctx['notes']}"
                     )
                     cf1, cf2 = st.columns(2)
-                    if cf1.button(f"Confirm {action_verb.title()}", key="btn_pending_confirm_yes", use_container_width=True):
+                    if cf1.button(f"Confirm {action_verb.title()}", key="btn_pending_confirm_yes", width="stretch"):
                         if confirm_ctx["action"] == "APPROVE":
                             t_payload = {
                                 "status": "ACTIVE",
@@ -2427,7 +2553,7 @@ elif selected_page == "🏢 Vendor Management":
                         else:
                             st.error(f"Status transition failed: {err_t}")
 
-                    if cf2.button("Cancel", key="btn_pending_confirm_no", use_container_width=True):
+                    if cf2.button("Cancel", key="btn_pending_confirm_no", width="stretch"):
                         st.session_state.pop("pending_confirm_action", None)
                         st.rerun()
 
@@ -2449,7 +2575,7 @@ elif selected_page == "🏢 Vendor Management":
                     ]
                     if c in df_dir.columns
                 ]
-                st.dataframe(df_dir[display_cols], use_container_width=True, hide_index=True)
+                st.dataframe(df_dir[display_cols], width="stretch", hide_index=True)
             else:
                 st.info("No vendors found.")
 
@@ -2596,7 +2722,7 @@ elif selected_page == "🏢 Vendor Management":
                 s_c2.metric("🏛️ Platform Commission", f"₹{settle_data.get('total_platform_commission', 0.0):,.2f}")
                 s_c3.metric("🤝 Total Payable Payouts", f"₹{settle_data.get('total_vendor_payouts', 0.0):,.2f}")
 
-                st.dataframe(pd.DataFrame(settle_data["settlements"]), use_container_width=True)
+                st.dataframe(pd.DataFrame(settle_data["settlements"]), width="stretch")
             else:
                 st.info("No vendor settlement records available.")
 
@@ -2636,9 +2762,9 @@ elif selected_page == "📦 Product Management":
             if not df_vendors.empty and "vendor_id" in df_products.columns:
                 merged_p = df_products.merge(df_vendors[["id", "name"]], left_on="vendor_id", right_on="id", suffixes=("", "_vendor"))
                 display_cols = [c for c in ["id", "name", "category", "price", "name_vendor", "description"] if c in merged_p.columns]
-                st.dataframe(merged_p[display_cols].rename(columns={"name_vendor": "vendor"}), use_container_width=True)
+                st.dataframe(merged_p[display_cols].rename(columns={"name_vendor": "vendor"}), width="stretch")
             else:
-                st.dataframe(df_products, use_container_width=True)
+                st.dataframe(df_products, width="stretch")
         else:
             st.info("No products found for your store." if current_role == "VENDOR" else "No products found in the catalog.")
 
@@ -2798,7 +2924,7 @@ elif selected_page == "📦 Product Management":
                         "Quality": f"{item['quality_score']:.0f}%",
                         "Audit Flags": ", ".join(item.get("flags", [])) if item.get("flags") else "Clean",
                     })
-                st.dataframe(pd.DataFrame(items_table), use_container_width=True)
+                st.dataframe(pd.DataFrame(items_table), width="stretch")
             else:
                 st.info("No vendor products available for attribute audit.")
         else:
@@ -2843,7 +2969,7 @@ elif selected_page == "📋 Inventory Management":
     if alerts:
         st.error(f"🚨 **Action Required:** {len(alerts)} item(s) are at or below reorder threshold!")
         df_al = pd.DataFrame(alerts)[["product_name", "warehouse", "current_stock", "reorder_level", "status"]]
-        st.dataframe(df_al, use_container_width=True)
+        st.dataframe(df_al, width="stretch")
 
     tab_inv_grid, tab_inv_intel, tab_inv_move, tab_inv_audit, tab_inv_replenish = st.tabs([
         "📊 Current Stock Levels",
@@ -2858,7 +2984,7 @@ elif selected_page == "📋 Inventory Management":
         if not df_status.empty:
             st.dataframe(
                 df_status[["product_id", "product_name", "warehouse", "current_stock", "reorder_level", "stock_value", "status"]],
-                use_container_width=True,
+                width="stretch",
             )
         else:
             st.info("No inventory items recorded for this scope yet.")
@@ -2885,7 +3011,7 @@ elif selected_page == "📋 Inventory Management":
                     },
                 )
                 style_chart(fig_st)
-                st.plotly_chart(fig_st, use_container_width=True)
+                st.plotly_chart(fig_st, width="stretch")
             with inv_col2:
                 fig_val = px.bar(
                     df_status.sort_values("stock_value", ascending=False).head(10),
@@ -2898,7 +3024,7 @@ elif selected_page == "📋 Inventory Management":
                 )
                 style_chart(fig_val, show_legend=False)
                 fig_val.update_layout(xaxis_tickangle=-28, coloraxis_showscale=False)
-                st.plotly_chart(fig_val, use_container_width=True)
+                st.plotly_chart(fig_val, width="stretch")
         else:
             st.info("No inventory analytics to display yet.")
 
@@ -2952,7 +3078,7 @@ elif selected_page == "📋 Inventory Management":
         st.subheader("Recent Stock Movements Audit Trail")
         movements = get_stock_movements_records(limit=100)
         if movements:
-            st.dataframe(pd.DataFrame(movements), use_container_width=True)
+            st.dataframe(pd.DataFrame(movements), width="stretch")
         else:
             st.info("No stock movement records found for your inventory scope.")
 
@@ -2976,7 +3102,7 @@ elif selected_page == "📋 Inventory Management":
         if replenish_data:
             df_rep = pd.DataFrame(replenish_data)
             cols_to_show = [c for c in ["product_name", "current_stock", "avg_daily_demand", "safety_stock", "reorder_point", "recommended_order_quantity", "urgency"] if c in df_rep.columns]
-            st.dataframe(df_rep[cols_to_show], use_container_width=True)
+            st.dataframe(df_rep[cols_to_show], width="stretch")
         else:
             st.info("No replenishment recommendations available for this inventory scope.")
 
@@ -3011,7 +3137,7 @@ elif selected_page == "💳 Transactions":
         else:
             df_filtered = df_tx
 
-        st.dataframe(df_filtered, use_container_width=True)
+        st.dataframe(df_filtered, width="stretch")
 
         if current_role not in ("VENDOR", "CUSTOMER"):
             st.markdown("---")
@@ -3084,7 +3210,11 @@ elif selected_page == "👥 Customer Analytics":
         df_rfm = df_c.merge(agg, on="customer_id", how="inner")
         df_rfm["aov"] = (df_rfm["monetary"] / df_rfm["frequency"]).round(2)
 
-        # Local K-Means
+        # Local K-Means (lazy-imported so cold Login/Dashboard pages avoid sklearn startup tax)
+        from sklearn.preprocessing import StandardScaler
+        from sklearn.cluster import KMeans
+        from sklearn.metrics import silhouette_score
+
         features = df_rfm[["recency", "frequency", "monetary"]].values
         scaler = StandardScaler()
         scaled_feat = scaler.fit_transform(features)
@@ -3166,7 +3296,7 @@ elif selected_page == "👥 Customer Analytics":
                         color_discrete_sequence=BRAND_PALETTE,
                     )
                     style_chart(fig_pie, height=300)
-                    st.plotly_chart(fig_pie, use_container_width=True)
+                    st.plotly_chart(fig_pie, width="stretch")
 
             with c_right:
                 st.subheader("🔍 Recency vs Monetary Clusters")
@@ -3190,7 +3320,7 @@ elif selected_page == "👥 Customer Analytics":
                         labels={"recency": "Recency (Days Since Last Order)", "monetary": "Lifetime Monetary Spend (₹)"},
                     )
                     style_chart(fig_scat)
-                    st.plotly_chart(fig_scat, use_container_width=True)
+                    st.plotly_chart(fig_scat, width="stretch")
 
             st.markdown("---")
             st.subheader("📊 Customer Spend Distribution")
@@ -3207,7 +3337,7 @@ elif selected_page == "👥 Customer Analytics":
                         color_discrete_sequence=["#8B5CF6"],
                     )
                     style_chart(fig_hist)
-                    st.plotly_chart(fig_hist, use_container_width=True)
+                    st.plotly_chart(fig_hist, width="stretch")
 
             st.markdown("---")
             st.subheader("📋 Customer RFM Metrics Table")
@@ -3221,7 +3351,7 @@ elif selected_page == "👥 Customer Analytics":
                     df_table["aov"] = df_table["avg_order_value"]
 
                 show_cols = [c for c in ["customer_id", "name", "email", "recency", "frequency", "monetary", "aov", "persona"] if c in df_table.columns]
-                st.dataframe(df_table[show_cols], use_container_width=True)
+                st.dataframe(df_table[show_cols], width="stretch")
 
         with tab_cust_churn:
             st.subheader("⚠️ Supervised Customer Churn Prediction (Stage 5)")
@@ -3274,7 +3404,7 @@ elif selected_page == "👥 Customer Analytics":
                             "Obs Spend (₹)": f"₹{c['monetary_obs']:,.2f}",
                             "Top Risk Drivers": drivers_str or "Baseline Profile",
                         })
-                    st.dataframe(pd.DataFrame(ch_table), use_container_width=True)
+                    st.dataframe(pd.DataFrame(ch_table), width="stretch")
 
         with tab_cust_cohorts:
             st.subheader("📅 Customer Signup Cohort Retention Heatmap (Stage 5)")
@@ -3313,7 +3443,7 @@ elif selected_page == "👥 Customer Analytics":
                     text_auto=".1f",
                 )
                 style_chart(fig_cohort)
-                st.plotly_chart(fig_cohort, use_container_width=True)
+                st.plotly_chart(fig_cohort, width="stretch")
 
                 st.caption(f"ℹ️ {cohort_res.get('methodology_note', '')}")
 
@@ -3346,7 +3476,7 @@ elif selected_page == "👥 Customer Analytics":
                     tier_df = pd.DataFrame(list(clv_res["clv_tiers_distribution"].items()), columns=["Tier", "Customer Count"])
                     fig_tier = px.bar(tier_df, x="Tier", y="Customer Count", color="Tier", color_discrete_sequence=BRAND_PALETTE)
                     style_chart(fig_tier, show_legend=False)
-                    st.plotly_chart(fig_tier, use_container_width=True)
+                    st.plotly_chart(fig_tier, width="stretch")
 
                 st.markdown("##### 📋 Customer CLV Predictions & Uncertainty Bounds")
                 clv_table = []
@@ -3363,7 +3493,7 @@ elif selected_page == "👥 Customer Analytics":
                         "CLV Tier": c["clv_tier"],
                         "90% Bounds": f"₹{c['clv_lower_bound']:,.0f} – ₹{c['clv_upper_bound']:,.0f}",
                     })
-                st.dataframe(pd.DataFrame(clv_table), use_container_width=True)
+                st.dataframe(pd.DataFrame(clv_table), width="stretch")
                 st.caption(f"ℹ️ {clv_res.get('model_assumptions', '')}")
 
         with tab_cust_funnel:
@@ -3400,9 +3530,9 @@ elif selected_page == "👥 Customer Analytics":
                     marker={"color": ["#111827", "#8B5CF6", "#38BDF8"]},
                 ))
                 style_chart(fig_funnel)
-                st.plotly_chart(fig_funnel, use_container_width=True)
+                st.plotly_chart(fig_funnel, width="stretch")
 
-                st.dataframe(pd.DataFrame(stages)[["stage_name", "event_type", "total_events", "unique_users", "conversion_from_previous_pct", "dropoff_from_previous_pct", "overall_conversion_pct"]], use_container_width=True)
+                st.dataframe(pd.DataFrame(stages)[["stage_name", "event_type", "total_events", "unique_users", "conversion_from_previous_pct", "dropoff_from_previous_pct", "overall_conversion_pct"]], width="stretch")
                 st.info(f"🛡️ {funnel_res.get('data_authenticity_declaration', '')}")
 
 
@@ -3505,7 +3635,7 @@ elif selected_page == "📈 Demand Forecasting":
                 yaxis_title="Units Demanded",
             )
             style_chart(fig_f)
-            st.plotly_chart(fig_f, use_container_width=True)
+            st.plotly_chart(fig_f, width="stretch")
         else:
             st.info("Insufficient historical sales data to forecast this product.")
     else:
@@ -3609,7 +3739,7 @@ elif selected_page == "🎯 Recommendations":
                             "Precision@5": f"{m_metrics.get('precision', 0.0):.3f}" if "precision" in m_metrics else "—",
                             "Recall@5": f"{m_metrics.get('recall', 0.0):.3f}" if "recall" in m_metrics else "—",
                         })
-                    st.dataframe(pd.DataFrame(comp_rows), use_container_width=True)
+                    st.dataframe(pd.DataFrame(comp_rows), width="stretch")
 
     with tab_rec_cf:
         eval_data = api_get("/recommendations/evaluation") if is_live_api else None
@@ -3812,7 +3942,7 @@ elif selected_page == "⚡ ETL & Data Warehouse":
                         "total_records", "committed_records", "duplicate_records",
                         "quarantined_records", "total_gross_value", "processing_duration_ms", "created_at"
                     ]],
-                    use_container_width=True,
+                    width="stretch",
                 )
 
                 # Batch Inspector
@@ -3851,7 +3981,7 @@ elif selected_page == "⚡ ETL & Data Warehouse":
                     stg_records, stg_tot = etl_service.list_batch_staging_records(db, chosen_batch_id, limit=50)
                     if stg_records:
                         st.markdown(f"**Staged Records ({stg_tot} total, displaying latest 50):**")
-                        st.dataframe(pd.DataFrame(stg_records)[["staging_id", "row_number", "source_transaction_id", "status", "validation_errors", "target_transaction_id"]], use_container_width=True)
+                        st.dataframe(pd.DataFrame(stg_records)[["staging_id", "row_number", "source_transaction_id", "status", "validation_errors", "target_transaction_id"]], width="stretch")
             else:
                 st.info("No ETL batches have been uploaded yet. Use the 'Bulk Ingestion' tab to upload CSV data.")
         finally:
@@ -3880,7 +4010,7 @@ elif selected_page == "⚡ ETL & Data Warehouse":
             try:
                 preview_df = pd.read_csv(io.BytesIO(file_bytes), nrows=5)
                 st.markdown("**File Preview (First 5 Rows):**")
-                st.dataframe(preview_df, use_container_width=True)
+                st.dataframe(preview_df, width="stretch")
             except Exception as e:
                 st.warning(f"Could not preview CSV: {e}")
 
@@ -3933,7 +4063,7 @@ elif selected_page == "⚡ ETL & Data Warehouse":
                         "quarantine_id", "batch_id", "row_number", "source_transaction_id",
                         "error_category", "error_details", "resolution_status", "reprocessing_attempts", "created_at"
                     ]],
-                    use_container_width=True,
+                    width="stretch",
                 )
 
                 st.markdown("---")
@@ -4093,7 +4223,7 @@ elif selected_page == "⚡ ETL & Data Warehouse":
                     hovermode="x unified",
                 )
                 style_chart(fig_trend, height=350)
-                st.plotly_chart(fig_trend, use_container_width=True)
+                st.plotly_chart(fig_trend, width="stretch")
 
                 # Table
                 st.markdown("#### 📋 Dimensional Records (Date x Product x Vendor)")
@@ -4103,7 +4233,7 @@ elif selected_page == "⚡ ETL & Data Warehouse":
                         "units_sold", "gross_sales_gmv", "discounts_total", "refunds_total", "net_sales",
                         "known_cogs", "reported_gross_profit", "cogs_coverage_pct", "transaction_count"
                     ]],
-                    use_container_width=True,
+                    width="stretch",
                 )
             else:
                 st.info("Daily sales mart is currently empty. Click 'Refresh Sales Mart' above to populate from transactions.")

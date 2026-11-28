@@ -22,7 +22,11 @@ from app.models.transaction import Transaction
 from app.services.churn_service import train_and_evaluate_churn_model
 
 
-def compute_predictive_clv(db: Session, horizon_months: int = 12) -> Dict[str, Any]:
+def compute_predictive_clv(
+    db: Session,
+    horizon_months: int = 12,
+    precomputed_churn: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     """
     Computes 12-month forward predictive CLV for all registered customers.
     """
@@ -41,8 +45,8 @@ def compute_predictive_clv(db: Session, horizon_months: int = 12) -> Dict[str, A
             "model_assumptions": "Insufficient records.",
         }
 
-    # Fetch churn probabilities for active life estimation
-    churn_results = train_and_evaluate_churn_model(db)
+    # Fetch churn probabilities for active life estimation (reuse precomputed if supplied)
+    churn_results = precomputed_churn if precomputed_churn is not None else train_and_evaluate_churn_model(db)
     churn_map = {c["customer_id"]: c["churn_probability"] for c in churn_results.get("customers", [])}
 
     df_tx = pd.DataFrame([
@@ -56,6 +60,11 @@ def compute_predictive_clv(db: Session, horizon_months: int = 12) -> Dict[str, A
 
     platform_aov = round(float(df_tx["amount"].mean()), 2) if not df_tx.empty else 150.0
     ref_date = df_tx["date"].max() if not df_tx.empty else pd.Timestamp("2024-12-31")
+    tx_by_customer = (
+        {int(cid): grp for cid, grp in df_tx.groupby("customer_id", sort=False)}
+        if not df_tx.empty
+        else {}
+    )
 
     # Bayesian prior weight for AOV shrinkage
     n_0 = 3.0
@@ -66,9 +75,8 @@ def compute_predictive_clv(db: Session, horizon_months: int = 12) -> Dict[str, A
 
     for c in customers:
         cid = c.customer_id
-        c_tx = df_tx[df_tx["customer_id"] == cid] if not df_tx.empty else pd.DataFrame()
-
-        order_count = len(c_tx)
+        c_tx = tx_by_customer.get(int(cid))
+        order_count = len(c_tx) if c_tx is not None else 0
         hist_spend = round(float(c_tx["amount"].sum()), 2) if order_count > 0 else 0.0
         total_hist_rev += hist_spend
 
